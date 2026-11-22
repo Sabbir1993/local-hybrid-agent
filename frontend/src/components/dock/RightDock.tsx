@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAppStore, type DockTab } from '../../stores/useAppStore';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { agentWsParam } from '../../utils/wsTarget';
 import { PlanView } from './PlanView';
 import { TasksView } from './TasksView';
@@ -136,16 +137,26 @@ export const RightDock: React.FC = () => {
     }
   };
 
+  const isNarrow = useMediaQuery('(max-width: 1180px)');
+
   return (
-    <div
-      id="right-dock"
-      className={`right-dock ${dockCollapsed ? 'dock-collapsed' : ''} ${dockExpanded ? 'dock-expanded' : ''}`}
-      style={{
-        width: dockExpanded ? undefined : `${dockWidth}px`,
-        maxWidth: '85vw',
-        minWidth: '300px',
-      }}
-    >
+    <>
+      {isNarrow && !dockCollapsed && (
+        <div
+          className="dock-backdrop"
+          aria-hidden="true"
+          onClick={() => setDockCollapsed(true)}
+        />
+      )}
+      <div
+        id="right-dock"
+        className={`right-dock ${dockCollapsed ? 'dock-collapsed' : ''} ${dockExpanded ? 'dock-expanded' : ''}`}
+        style={{
+          width: isNarrow ? undefined : (dockExpanded ? undefined : `${dockWidth}px`),
+          maxWidth: isNarrow ? undefined : '85vw',
+          minWidth: isNarrow ? undefined : '300px',
+        }}
+      >
       <div
         className={`dock-grip ${isDragging ? 'dragging' : ''}`}
         id="dock-grip"
@@ -401,5 +412,6 @@ export const RightDock: React.FC = () => {
         <TerminalPanel />
       </div>
     </div>
+    </>
   );
 };

@@ -377,7 +377,7 @@ export const ChatArea: React.FC = () => {
     return () => window.clearInterval(t);
   }, []);
   const sessionLoading = useAppStore((st) => st.sessionLoading);
-  const { sendPrompt, isStreaming, messages, selectedModel, serverStatus, isModelLoading, loadSelectedModel, openPreviewModal, openDiagramModal, appMode } = useAppStore();
+  const { sendPrompt, isStreaming, messages, selectedModel, serverStatus, loadSelectedModel, openPreviewModal, openDiagramModal, appMode, activeCustomAgent } = useAppStore();
   const [expandedPrompts, setExpandedPrompts] = useState<Record<string, boolean>>({});
   const [overflowPrompts, setOverflowPrompts] = useState<Record<string, boolean>>({});
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -556,7 +556,6 @@ export const ChatArea: React.FC = () => {
   };
 
   const isModelLoaded = Boolean(serverStatus?.pid || serverStatus?.cloud_main);
-  const isCloudActive = Boolean(serverStatus?.cloud_main);
   const rawModelName =
     serverStatus?.cloud_main?.display ||
     serverStatus?.model ||
@@ -611,76 +610,60 @@ export const ChatArea: React.FC = () => {
       <div id="chat" ref={chatContainerRef} onClick={handleChatClick} onScroll={handleScroll}>
         <div id="chat-inner">
         {(!messages || messages.length === 0) ? (sessionLoading ? <div id="empty" aria-busy="true" /> : (
-          <div id="empty">
-            <div className="big">⚡</div>
-            <h2>{env.projectName}</h2>
-            <p id="empty-model" className="mono">
-              {isModelLoaded ? (
-                isCloudActive ? (
-                  <>
-                    {modelName}
-                    {' · ☁️ cloud · '}
-                    {serverStatus?.cloud_main?.provider || 'API'}
-                  </>
-                ) : (
-                  <>
-                    {modelName}
-                    {serverStatus?.vision_capable ? ' · 👁️ vision' : ''}
-                    {serverStatus?.measured_tg_tokens_per_sec
-                      ? ` · bench ${Number(serverStatus.measured_tg_tokens_per_sec).toFixed(1)} t/s`
-                      : ''}
-                  </>
-                )
-              ) : isModelLoading ? (
-                'Loading model into GPU VRAM…'
-              ) : (
-                'Model unloaded'
-              )}
+          <div id="empty" className="welcome-hero-wrap">
+            <h1 style={{ fontSize: '26px', fontWeight: 700, color: 'var(--text)', margin: '0 0 8px 0', letterSpacing: '-0.02em' }}>
+              Welcome to {env.projectName || 'SSL AI'}
+            </h1>
+            <p style={{ fontSize: '15px', color: 'var(--dim)', margin: '0 0 20px 0' }}>
+              {appMode === 'chat'
+                ? 'How can I help you today?'
+                : appMode === 'agent'
+                  ? (activeCustomAgent?.name ? `Chatting with ${activeCustomAgent.name} — How can I help you?` : 'What autonomous task shall we run today?')
+                  : 'What are we building or debugging today?'}
             </p>
-            <div className="empty-card">
-              {isModelLoaded ? (
-                isCloudActive ? (
-                  <>
-                    <p><b>{modelName} is ready!</b></p>
-                    <p className="dim" style={{ marginTop: '6px' }}>
-                      Connected to {serverStatus?.cloud_main?.provider || 'Cloud API'} (zero GPU VRAM usage). Type your message below and press Enter to chat.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <p><b>{modelName} is ready!</b></p>
-                    <p className="dim" style={{ marginTop: '6px' }}>
-                      Type your message below and press Enter to chat.
-                    </p>
-                  </>
-                )
-              ) : (
-                <>
-                  <p><b>No model is currently loaded in GPU VRAM.</b></p>
-                  <p className="dim" style={{ marginTop: '6px' }}>
-                    {modelName !== 'Please select a model' ? (
-                      <>
-                        Click{' '}
-                        <button
-                          onClick={loadSelectedModel}
-                          style={{
-                            fontWeight: 700,
-                            color: 'var(--blue, #38bdf8)',
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            padding: 0,
-                          }}
-                        >
-                          ▶ Load ({modelName})
-                        </button>{' '}
-                        in the bottom bar, or simply type a message below.
-                      </>
-                    ) : (
-                      'Please select a model to begin.'
-                    )}
-                  </p>
-                </>
+
+            {/* Quick Prompt Suggestion Cards (Matching Image 1) */}
+            <div className="empty-suggestions-grid">
+              {(appMode === 'chat' ? [
+                { label: 'Draft a PRD', prompt: 'Draft a Product Requirement Document (PRD) for ' },
+                { label: 'Summarise a document', prompt: 'Please summarise this document highlighting key insights and action items: ' },
+                { label: 'Analyse a report', prompt: 'Analyse this report and provide executive takeaways: ' },
+                { label: 'Search company knowledge', prompt: 'Search company knowledge for ' },
+              ] : appMode === 'agent' ? [
+                { label: 'Research a topic', prompt: 'Research and synthesize a detailed report on ' },
+                { label: 'Compliance check', prompt: 'Run a compliance and security audit on ' },
+                { label: 'Create presentation', prompt: 'Generate a structured outline and presentation slides for ' },
+                { label: 'Multi-step workflow', prompt: 'Create and execute a multi-step plan to ' },
+              ] : [
+                { label: 'Review codebase', prompt: 'Review the project codebase for potential improvements, bugs, and performance bottlenecks.' },
+                { label: 'Refactor component', prompt: 'Refactor the selected component to improve modularity and clean architecture.' },
+                { label: 'Debug issue / error', prompt: 'Help me diagnose and fix this error: ' },
+                { label: 'Write unit tests', prompt: 'Generate comprehensive unit tests for ' },
+              ]).map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  className="empty-suggestion-btn"
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent('edit-user-prompt', { detail: { text: item.prompt } }));
+                  }}
+                >
+                  <span>{item.label}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Active Model Subtitle Status */}
+            <div style={{ marginTop: '24px', display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '4px 12px', borderRadius: '16px', background: 'var(--panel2, rgba(255,255,255,0.05))', border: '1px solid var(--border-subtle, rgba(255,255,255,0.08))', fontSize: '11px', color: 'var(--dim)' }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: isModelLoaded ? '#4ade80' : '#fbbf24' }} />
+              <span>{isModelLoaded ? `${modelName} · Ready` : (modelName !== 'Please select a model' ? `${modelName} · Unloaded` : 'Please select a model')}</span>
+              {!isModelLoaded && modelName !== 'Please select a model' && (
+                <button
+                  onClick={loadSelectedModel}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--accent, #6366f1)', fontWeight: 600, cursor: 'pointer', padding: '0 0 0 4px' }}
+                >
+                  ▶ Load
+                </button>
               )}
             </div>
           </div>
@@ -989,20 +972,26 @@ export const ChatArea: React.FC = () => {
                       />
                       )}
                       <AnswerBadge m={m} />
-                      {questionCards && (
-                        <QuestionCard
-                          questions={questionCards.list}
-                          title={questionCards.title}
-                          submitLabel={questionCards.submit}
-                          closed={!isLastMsg}
-                          onSubmit={(text) => {
-                            const st = useAppStore.getState();
-                            if (st.isStreaming || (st.appMode === 'code' && !st.activeProjectId)) return false;
-                            void sendPrompt(text, { displayContent: text });
-                            return true;
-                          }}
-                        />
-                      )}
+                      {questionCards && (() => {
+                        const mIdx = messages.indexOf(m);
+                        const nextM = mIdx >= 0 && mIdx + 1 < messages.length ? messages[mIdx + 1] : null;
+                        const ansTxt = nextM && nextM.role === 'user' ? nextM.content : '';
+                        return (
+                          <QuestionCard
+                            questions={questionCards.list}
+                            title={questionCards.title}
+                            submitLabel={questionCards.submit}
+                            closed={!isLastMsg}
+                            answeredText={ansTxt}
+                            onSubmit={(text) => {
+                              const st = useAppStore.getState();
+                              if (st.isStreaming || (st.appMode === 'code' && !st.activeProjectId)) return false;
+                              void sendPrompt(text, { displayContent: text });
+                              return true;
+                            }}
+                          />
+                        );
+                      })()}
 
                       {!held && <BotActions m={m} isLast={messages[messages.length - 1] === m} streaming={isStreaming} />}
 

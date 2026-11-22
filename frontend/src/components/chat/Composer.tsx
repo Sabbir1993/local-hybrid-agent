@@ -68,6 +68,7 @@ export const Composer: React.FC = () => {
     showToast,
     setActiveCustomAgent,
     compactConversation,
+    isReadOnlyShare,
   } = useAppStore();
 
   const [inputVal, setInputVal] = useState(() => { const st = useAppStore.getState(); return readDraft(`${st.appMode}:${sessionKey(st.activeSessionId)}`)?.text || ''; });
@@ -813,6 +814,27 @@ export const Composer: React.FC = () => {
     high: 'Thinks longer on hard questions',
     extra: 'Most thorough, slowest',
   };
+  const EFFORT_LEVELS: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'extra'];
+  const currentEffortIndex = Math.max(0, EFFORT_LEVELS.indexOf(reasoningEffort));
+
+  const handleSliderMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const track = e.currentTarget;
+    const update = (clientX: number) => {
+      const rect = track.getBoundingClientRect();
+      const clickX = clientX - rect.left;
+      const ratio = Math.max(0, Math.min(1, clickX / rect.width));
+      const step = Math.round(ratio * 4);
+      setReasoningEffort(EFFORT_LEVELS[step]);
+    };
+    update(e.clientX);
+    const onMove = (moveEv: MouseEvent) => update(moveEv.clientX);
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   const contextStats = useMemo(() => {
     // the picked cloud model's own window: the server only knows it once a run has bound the lane, so right after a
@@ -883,6 +905,36 @@ export const Composer: React.FC = () => {
       return a.name.localeCompare(b.name);
     });
   }, [availableModels, modelSearch]);
+
+  if (isReadOnlyShare) {
+    return (
+      <footer>
+        <div id="f-inner" style={{ padding: '16px 20px', maxWidth: '768px', margin: '0 auto' }}>
+          <div
+            style={{
+              padding: '14px 20px',
+              textAlign: 'center',
+              background: 'var(--panel, #18181b)',
+              borderRadius: '12px',
+              border: '1px solid var(--border-subtle, rgba(255, 255, 255, 0.08))',
+              color: 'var(--text-muted, #a1a1aa)',
+              fontSize: '13px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '10px',
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            </svg>
+            <span>You are viewing a shared conversation (read-only). Visitors cannot send messages.</span>
+          </div>
+        </div>
+      </footer>
+    );
+  }
 
   return (
     <footer>
@@ -1711,7 +1763,7 @@ export const Composer: React.FC = () => {
                 )}
               </div>
 
-              {/* Reasoning Effort Dropdown */}
+              {/* Reasoning Effort Stepped Slider Menu */}
               <div className="effort-wrap" id="effort-wrap" style={{ position: 'relative' }}>
                 <button
                   id="effort-btn"
@@ -1719,24 +1771,26 @@ export const Composer: React.FC = () => {
                   type="button"
                   aria-haspopup="menu"
                   aria-expanded={showEffortMenu}
-                  title="Reasoning effort"
+                  title={`Thinking effort (${effortDisplay})`}
                   onClick={(e) => {
                     e.stopPropagation();
                     setShowEffortMenu(!showEffortMenu);
                   }}
                   style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--dim)',
+                    background: 'rgba(255, 255, 255, 0.06)',
+                    border: '1px solid var(--border-subtle, rgba(255, 255, 255, 0.12))',
+                    color: 'var(--text)',
                     cursor: 'pointer',
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: '4px',
+                    gap: '6px',
                     fontSize: '12px',
-                    padding: '2px 4px',
+                    padding: '4px 10px',
+                    borderRadius: '16px',
+                    fontWeight: 500,
                   }}
                 >
-                  <span id="effort-label">{effortDisplay}</span>
+                  <span id="effort-label">Thinking effort</span>
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <path d="m6 9 6 6 6-6" />
                   </svg>
@@ -1748,55 +1802,142 @@ export const Composer: React.FC = () => {
                     id="effort-menu"
                     role="menu"
                     style={{
-                      display: 'block',
+                      display: 'flex',
+                      flexDirection: 'column',
                       position: 'absolute',
                       bottom: '100%',
                       right: 0,
                       marginBottom: '8px',
                       background: 'var(--panel, #18181b)',
-                      border: '1px solid var(--border-subtle, rgba(255, 255, 255, 0.12))',
-                      borderRadius: '12px',
-                      padding: '6px',
-                      minWidth: '170px',
+                      border: '1px solid var(--border-subtle, rgba(255, 255, 255, 0.14))',
+                      borderRadius: '16px',
+                      padding: '14px 16px',
+                      width: '240px',
                       boxShadow: '0 12px 36px rgba(0,0,0,0.5)',
                       zIndex: 9999,
                       animation: 'claudePopIn 0.12s cubic-bezier(0.16, 1, 0.3, 1)',
                       transformOrigin: 'bottom right',
                     }}
                   >
-                    {(['none', 'low', 'medium', 'high', 'extra'] as ReasoningEffort[]).map((level) => (
-                      <button
-                        key={level}
-                        type="button"
-                        className={`effort-item ${reasoningEffort === level ? 'active' : ''}`}
-                        role="menuitemradio"
-                        data-level={level}
-                        onClick={() => {
-                          setReasoningEffort(level);
-                          setShowEffortMenu(false);
-                        }}
+                    {/* Header: Level > */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--text)', textTransform: 'capitalize' }}>
+                          {reasoningEffort}
+                        </span>
+                        <span style={{ fontSize: '13.5px', color: 'var(--dim)', fontWeight: 500 }}>&gt;</span>
+                      </div>
+                    </div>
+
+                    {/* Stepped Slider Track */}
+                    <div
+                      role="slider"
+                      aria-valuemin={0}
+                      aria-valuemax={4}
+                      aria-valuenow={currentEffortIndex}
+                      aria-valuetext={reasoningEffort}
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+                          e.preventDefault();
+                          if (currentEffortIndex < 4) setReasoningEffort(EFFORT_LEVELS[currentEffortIndex + 1]);
+                        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+                          e.preventDefault();
+                          if (currentEffortIndex > 0) setReasoningEffort(EFFORT_LEVELS[currentEffortIndex - 1]);
+                        }
+                      }}
+                      onMouseDown={handleSliderMouseDown}
+                      style={{
+                        position: 'relative',
+                        width: '100%',
+                        height: '22px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        cursor: 'pointer',
+                        userSelect: 'none',
+                        outline: 'none',
+                      }}
+                    >
+                      {/* Base track */}
+                      <div
                         style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          width: '100%',
-                          padding: '7px 12px',
-                          background: 'transparent',
-                          border: 'none',
-                          color: 'var(--text)',
-                          cursor: 'pointer',
-                          borderRadius: '6px',
-                          fontSize: '13px',
-                          textAlign: 'left',
+                          position: 'absolute',
+                          left: 0,
+                          right: 0,
+                          height: '14px',
+                          borderRadius: '7px',
+                          background: 'rgba(255, 255, 255, 0.12)',
+                          overflow: 'hidden',
                         }}
                       >
-                        <span className="effort-item-text">
-                          <span style={{ textTransform: 'capitalize' }}>{level}</span>
-                          <span className="effort-item-hint">{EFFORT_HINTS[level]}</span>
-                        </span>
-                      </button>
-                    ))}
-                    <div style={{ height: '1px', background: 'var(--border-subtle, rgba(255, 255, 255, 0.08))', margin: '6px 4px' }} />
+                        {/* Active blue fill */}
+                        <div
+                          style={{
+                            width: `${(currentEffortIndex / 4) * 100}%`,
+                            height: '100%',
+                            background: 'var(--accent, #3b82f6)',
+                            borderRadius: '7px',
+                            transition: 'width 0.15s ease',
+                          }}
+                        />
+                      </div>
+
+                      {/* 5 Step Dots */}
+                      {[0, 1, 2, 3, 4].map((step) => {
+                        const pct = (step / 4) * 100;
+                        return (
+                          <div
+                            key={step}
+                            style={{
+                              position: 'absolute',
+                              left: `${pct}%`,
+                              transform: 'translateX(-50%)',
+                              width: '4px',
+                              height: '4px',
+                              borderRadius: '50%',
+                              background: step <= currentEffortIndex ? 'rgba(255, 255, 255, 0.95)' : 'rgba(255, 255, 255, 0.35)',
+                              pointerEvents: 'none',
+                              zIndex: 2,
+                            }}
+                          />
+                        );
+                      })}
+
+                      {/* White Thumb Knob */}
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: `${(currentEffortIndex / 4) * 100}%`,
+                          transform: 'translateX(-50%)',
+                          width: '20px',
+                          height: '20px',
+                          borderRadius: '50%',
+                          background: '#ffffff',
+                          boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+                          transition: 'left 0.15s ease',
+                          zIndex: 3,
+                          pointerEvents: 'none',
+                        }}
+                      />
+                    </div>
+
+                    {/* Step Labels */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px', fontSize: '10px', color: 'var(--dim)' }}>
+                      <span>None</span>
+                      <span>Low</span>
+                      <span>Med</span>
+                      <span>High</span>
+                      <span>Extra</span>
+                    </div>
+
+                    {/* Description Hint */}
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted, #a1a1aa)', marginTop: '8px', minHeight: '16px' }}>
+                      {EFFORT_HINTS[reasoningEffort]}
+                    </div>
+
+                    <div style={{ height: '1px', background: 'var(--border-subtle, rgba(255, 255, 255, 0.08))', margin: '10px 0 6px' }} />
+
+                    {/* Deep research */}
                     <div
                       className="effort-deep"
                       id="effort-deep"
@@ -1812,7 +1953,7 @@ export const Composer: React.FC = () => {
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         width: '100%',
-                        padding: '8px 12px',
+                        padding: '6px 4px',
                         background: 'transparent',
                         border: 'none',
                         color: 'var(--text)',

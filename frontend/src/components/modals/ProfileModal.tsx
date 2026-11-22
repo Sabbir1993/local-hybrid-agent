@@ -1,0 +1,334 @@
+import React, { useState, useEffect } from 'react';
+import { useAppStore } from '../../stores/useAppStore';
+import { api } from '../../services/api';
+import { Camera, X, Check, User, Mail, Briefcase, Building, Hash, Calendar, Heart } from 'lucide-react';
+
+interface Props {
+  onClose: () => void;
+}
+
+export const ProfileModal: React.FC<Props> = ({ onClose }) => {
+  const { currentUser, showToast } = useAppStore();
+
+  const [displayName, setDisplayName] = useState(currentUser?.display_name || currentUser?.username || '');
+  const [email, setEmail] = useState(currentUser?.email || '');
+  const [image, setImage] = useState(currentUser?.image || '');
+  const [employeeId, setEmployeeId] = useState(currentUser?.employee_id || '');
+  const [department, setDepartment] = useState(currentUser?.department || '');
+  const [designation, setDesignation] = useState(currentUser?.designation || '');
+  const [dob, setDob] = useState(currentUser?.dob || '');
+  const [gender, setGender] = useState(currentUser?.gender || '');
+
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const initials = (displayName || currentUser?.username || 'SH')
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setError('Profile image must be less than 2MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      setImage(dataUrl);
+      setError('');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!displayName.trim()) {
+      setError('Name is required');
+      return;
+    }
+    setIsSaving(true);
+    setError('');
+
+    const res = await api.auth.updateProfile({
+      display_name: displayName.trim(),
+      email: email.trim(),
+      image: image.trim(),
+      employee_id: employeeId.trim(),
+      department: department.trim(),
+      designation: designation.trim(),
+      dob: dob.trim(),
+      gender: gender.trim(),
+    });
+
+    setIsSaving(false);
+
+    if (res.ok && res.user) {
+      useAppStore.setState({ currentUser: res.user });
+      showToast('Profile updated successfully!', 'success');
+      onClose();
+    } else {
+      setError(res.error || 'Failed to update profile');
+    }
+  };
+
+  return (
+    <div className="ca-modal-overlay" style={{ display: 'flex' }} onClick={onClose}>
+      <div
+        className="ca-modal-box"
+        style={{ maxWidth: 580, width: '92%', maxHeight: '90vh', overflowY: 'auto' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="ca-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle, rgba(255,255,255,0.08))', paddingBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 34, height: 34, borderRadius: 8, background: 'var(--accent, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
+              <User size={18} />
+            </div>
+            <div>
+              <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, color: 'var(--text)' }}>My Profile</h2>
+              <div style={{ fontSize: 12, color: 'var(--dim)', marginTop: 2 }}>Update personal information & profile picture</div>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="claude-icon-tool"
+            onClick={onClose}
+            aria-label="Close"
+            style={{ width: 28, height: 28 }}
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 18, marginTop: 18 }}>
+          {/* Avatar Picture Row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
+            <div
+              style={{
+                width: 72,
+                height: 72,
+                borderRadius: '50%',
+                background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#fff',
+                fontWeight: 700,
+                fontSize: 24,
+                overflow: 'hidden',
+                flexShrink: 0,
+                border: '2px solid var(--border-subtle, rgba(255,255,255,0.15))',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+              }}
+            >
+              {image ? (
+                <img src={image} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                <span>{initials}</span>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 12px',
+                  borderRadius: 6,
+                  background: 'var(--panel2, rgba(255,255,255,0.06))',
+                  border: '1px solid var(--border-subtle, rgba(255,255,255,0.12))',
+                  fontSize: 12,
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  color: 'var(--text)',
+                  width: 'fit-content',
+                }}
+              >
+                <Camera size={14} />
+                <span>Upload new photo</span>
+                <input type="file" accept="image/*" onChange={handleFileChange} style={{ display: 'none' }} />
+              </label>
+              {image && (
+                <button
+                  type="button"
+                  onClick={() => setImage('')}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--danger, #f87171)',
+                    fontSize: 11,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    padding: 0,
+                  }}
+                >
+                  Remove photo
+                </button>
+              )}
+              <span style={{ fontSize: 11, color: 'var(--dim)' }}>Recommended square JPG or PNG, max 2MB</span>
+            </div>
+          </div>
+
+          {error && (
+            <div style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', color: '#f87171', fontSize: 12 }}>
+              {error}
+            </div>
+          )}
+
+          {/* Form Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            {/* Display Name */}
+            <div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500, color: 'var(--text)', marginBottom: 6 }}>
+                <User size={13} style={{ color: 'var(--dim)' }} />
+                <span>Full Name *</span>
+              </label>
+              <input
+                type="text"
+                className="ca-input"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="e.g. Sabbir Hossain"
+                required
+              />
+            </div>
+
+            {/* Email */}
+            <div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500, color: 'var(--text)', marginBottom: 6 }}>
+                <Mail size={13} style={{ color: 'var(--dim)' }} />
+                <span>Email Address</span>
+              </label>
+              <input
+                type="email"
+                className="ca-input"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@company.com"
+              />
+            </div>
+
+            {/* Employee ID */}
+            <div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500, color: 'var(--text)', marginBottom: 6 }}>
+                <Hash size={13} style={{ color: 'var(--dim)' }} />
+                <span>Employee ID</span>
+              </label>
+              <input
+                type="text"
+                className="ca-input"
+                value={employeeId}
+                onChange={(e) => setEmployeeId(e.target.value)}
+                placeholder="e.g. EMP-1042"
+              />
+            </div>
+
+            {/* Department */}
+            <div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500, color: 'var(--text)', marginBottom: 6 }}>
+                <Building size={13} style={{ color: 'var(--dim)' }} />
+                <span>Department</span>
+              </label>
+              <input
+                type="text"
+                className="ca-input"
+                value={department}
+                onChange={(e) => setDepartment(e.target.value)}
+                placeholder="e.g. Engineering / Product"
+              />
+            </div>
+
+            {/* Designation */}
+            <div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500, color: 'var(--text)', marginBottom: 6 }}>
+                <Briefcase size={13} style={{ color: 'var(--dim)' }} />
+                <span>Designation</span>
+              </label>
+              <input
+                type="text"
+                className="ca-input"
+                value={designation}
+                onChange={(e) => setDesignation(e.target.value)}
+                placeholder="e.g. Senior Product Manager"
+              />
+            </div>
+
+            {/* Date of Birth */}
+            <div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500, color: 'var(--text)', marginBottom: 6 }}>
+                <Calendar size={13} style={{ color: 'var(--dim)' }} />
+                <span>Date of Birth</span>
+              </label>
+              <input
+                type="date"
+                className="ca-input"
+                value={dob}
+                onChange={(e) => setDob(e.target.value)}
+              />
+            </div>
+
+            {/* Gender */}
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500, color: 'var(--text)', marginBottom: 6 }}>
+                <Heart size={13} style={{ color: 'var(--dim)' }} />
+                <span>Gender</span>
+              </label>
+              <select
+                className="ca-input"
+                value={gender}
+                onChange={(e) => setGender(e.target.value)}
+              >
+                <option value="">Select gender...</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Non-binary">Non-binary</option>
+                <option value="Other">Other</option>
+                <option value="Prefer not to say">Prefer not to say</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Footer Actions */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, paddingTop: 12, borderTop: '1px solid var(--border-subtle, rgba(255,255,255,0.08))' }}>
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={onClose}
+              style={{ padding: '6px 14px', fontSize: 13 }}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="btn primary"
+              disabled={isSaving}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 16px', fontSize: 13 }}
+            >
+              {isSaving ? (
+                'Saving…'
+              ) : (
+                <>
+                  <Check size={14} />
+                  <span>Save Changes</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};

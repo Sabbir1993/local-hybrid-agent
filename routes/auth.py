@@ -4,6 +4,7 @@ import hashlib
 import secrets
 import time
 from types import SimpleNamespace
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -141,14 +142,70 @@ async def logout(request: Request, response: Response):
 @router.get("/me")
 async def me(user: Principal = Depends(get_current_user)):
     perms = sorted(user.permission_keys) if not user.is_super_admin else sorted(auth_db.PERMISSIONS.keys())
+    row = auth_db.get_user_by_id(user.id)
     return {
-        "user": {"id": user.id, "username": user.username, "display_name": user.display_name,
-                  "is_super_admin": user.is_super_admin, "must_change_password": user.must_change_password},
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "display_name": (row["display_name"] if row and "display_name" in row.keys() else None) or user.display_name or user.username,
+            "email": row["email"] if row and "email" in row.keys() else None,
+            "image": row["image"] if row and "image" in row.keys() else None,
+            "employee_id": row["employee_id"] if row and "employee_id" in row.keys() else None,
+            "department": row["department"] if row and "department" in row.keys() else None,
+            "designation": row["designation"] if row and "designation" in row.keys() else None,
+            "dob": row["dob"] if row and "dob" in row.keys() else None,
+            "gender": row["gender"] if row and "gender" in row.keys() else None,
+            "is_super_admin": user.is_super_admin,
+            "must_change_password": user.must_change_password,
+        },
         "roles": user.role_names,
         "permissions": perms,
         "idle_enabled": session_policy()["enabled"],
         "idle_seconds": session_policy()["minutes"] * 60,
     }
+
+
+class ProfileUpdateBody(BaseModel):
+    display_name: Optional[str] = None
+    email: Optional[str] = None
+    image: Optional[str] = None
+    employee_id: Optional[str] = None
+    department: Optional[str] = None
+    designation: Optional[str] = None
+    dob: Optional[str] = None
+    gender: Optional[str] = None
+
+
+@router.put("/profile")
+async def update_profile(body: ProfileUpdateBody, user: Principal = Depends(get_current_user)):
+    updates = {k: v.strip() if isinstance(v, str) else v for k, v in body.dict().items() if v is not None}
+    if "email" in updates and updates["email"]:
+        existing = auth_db.db().execute(
+            "SELECT id FROM users WHERE email = ? AND id != ?", (updates["email"], user.id)
+        ).fetchone()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email is already in use by another user")
+    row = auth_db.update_user_profile(user.id, updates)
+    audit_log(user, action="user.profile_update", resource=user.username, result="allow",
+              detail={"fields": list(updates.keys())})
+    return {
+        "ok": True,
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "display_name": (row["display_name"] if row and "display_name" in row.keys() else None) or user.display_name or user.username,
+            "email": row["email"] if row and "email" in row.keys() else None,
+            "image": row["image"] if row and "image" in row.keys() else None,
+            "employee_id": row["employee_id"] if row and "employee_id" in row.keys() else None,
+            "department": row["department"] if row and "department" in row.keys() else None,
+            "designation": row["designation"] if row and "designation" in row.keys() else None,
+            "dob": row["dob"] if row and "dob" in row.keys() else None,
+            "gender": row["gender"] if row and "gender" in row.keys() else None,
+            "is_super_admin": user.is_super_admin,
+            "must_change_password": user.must_change_password,
+        }
+    }
+
 
 
 class SessionPolicyBody(BaseModel):

@@ -28,6 +28,12 @@ CREATE TABLE IF NOT EXISTS users (
     totp_secret TEXT,
     totp_enabled INTEGER NOT NULL DEFAULT 0,
     totp_last_counter INTEGER NOT NULL DEFAULT 0,
+    image TEXT,
+    employee_id TEXT,
+    department TEXT,
+    designation TEXT,
+    dob TEXT,
+    gender TEXT,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     last_login_at REAL
@@ -296,7 +302,13 @@ def init_tables(conn) -> None:
     _cols = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
     for col, ddl in (("totp_secret", "TEXT"),
                      ("totp_enabled", "INTEGER NOT NULL DEFAULT 0"),
-                     ("totp_last_counter", "INTEGER NOT NULL DEFAULT 0")):
+                     ("totp_last_counter", "INTEGER NOT NULL DEFAULT 0"),
+                     ("image", "TEXT"),
+                     ("employee_id", "TEXT"),
+                     ("department", "TEXT"),
+                     ("designation", "TEXT"),
+                     ("dob", "TEXT"),
+                     ("gender", "TEXT")):
         if col not in _cols:
             conn.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
             conn.commit()

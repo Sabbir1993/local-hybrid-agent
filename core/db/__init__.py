@@ -45,6 +45,8 @@ from .sessions import (
     db_update_session_title,
     db_update_session_agent_id,
     db_update_session_model,
+    db_update_session_pinned,
+    db_search_sessions,
     db_delete_session,
     db_load_messages,
     db_append_message,

@@ -21,6 +21,7 @@ class SessionReq(BaseModel):
     title: Optional[str] = None
     agent_id: Optional[int] = None
     model: Optional[str] = None
+    is_pinned: Optional[bool] = None
 
 
 class BrowseFolderReq(BaseModel):

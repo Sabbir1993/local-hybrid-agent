@@ -98,6 +98,13 @@ export interface UserProfile {
   id: string;
   username: string;
   display_name?: string;
+  email?: string;
+  image?: string;
+  employee_id?: string;
+  department?: string;
+  designation?: string;
+  dob?: string;
+  gender?: string;
   organization?: string;
   is_super_admin?: boolean;
   must_change_password?: boolean;
@@ -176,6 +183,13 @@ export const api = {
           id: String(u.id || ''),
           username: u.username || '',
           display_name: u.display_name || u.username || '',
+          email: u.email || '',
+          image: u.image || '',
+          employee_id: u.employee_id || '',
+          department: u.department || '',
+          designation: u.designation || '',
+          dob: u.dob || '',
+          gender: u.gender || '',
           organization: u.organization || 'SSLWIRELESS',
           is_super_admin: Boolean(u.is_super_admin),
           must_change_password: Boolean(u.must_change_password),
@@ -184,6 +198,50 @@ export const api = {
         };
       } catch (err) {
         return null;
+      }
+    },
+
+    updateProfile: async (data: {
+      display_name?: string;
+      email?: string;
+      image?: string;
+      employee_id?: string;
+      department?: string;
+      designation?: string;
+      dob?: string;
+      gender?: string;
+    }): Promise<{ ok: boolean; user?: UserProfile; error?: string }> => {
+      try {
+        const res = await apiFetch('/auth/profile', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const json = await res.json();
+        if (!res.ok) return { ok: false, error: json.detail || 'Failed to update profile' };
+        const u = json.user;
+        return {
+          ok: true,
+          user: {
+            id: String(u.id || ''),
+            username: u.username || '',
+            display_name: u.display_name || u.username || '',
+            email: u.email || '',
+            image: u.image || '',
+            employee_id: u.employee_id || '',
+            department: u.department || '',
+            designation: u.designation || '',
+            dob: u.dob || '',
+            gender: u.gender || '',
+            organization: u.organization || 'SSLWIRELESS',
+            is_super_admin: Boolean(u.is_super_admin),
+            must_change_password: Boolean(u.must_change_password),
+            roles: u.roles || [],
+            permissions: u.permissions || [],
+          },
+        };
+      } catch (err: any) {
+        return { ok: false, error: err.message || 'Network error' };
       }
     },
 
@@ -365,14 +423,42 @@ export const api = {
       }
     },
 
-    getMessages: async (sessionId: string | number): Promise<any[]> => {
+    getMessages: async (sessionId: string | number): Promise<{ messages: any[]; is_owner: boolean; title?: string }> => {
       try {
         const res = await apiFetch(`/control/sessions/${sessionId}/messages`);
+        if (!res.ok) return { messages: [], is_owner: false };
+        const data = await res.json();
+        return {
+          messages: data.messages || [],
+          is_owner: data.is_owner ?? true,
+          title: data.title,
+        };
+      } catch (_) {
+        return { messages: [], is_owner: false };
+      }
+    },
+
+    search: async (query: string): Promise<any[]> => {
+      try {
+        const res = await apiFetch(`/control/sessions/search?q=${encodeURIComponent(query)}`);
         if (!res.ok) return [];
         const data = await res.json();
-        return data.messages || [];
+        return data.sessions || [];
       } catch (_) {
         return [];
+      }
+    },
+
+    pin: async (sessionId: string | number, isPinned: boolean): Promise<boolean> => {
+      try {
+        const res = await apiFetch(`/control/sessions/${sessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_pinned: isPinned }),
+        });
+        return res.ok;
+      } catch (_) {
+        return false;
       }
     },
 

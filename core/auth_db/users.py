@@ -176,3 +176,16 @@ def upsert_user_mcp_server(user_id: int, name: str, config: dict) -> None:
 def delete_user_mcp_server(user_id: int, name: str) -> None:
     db().execute("DELETE FROM user_mcp_servers WHERE user_id = ? AND name = ?", (user_id, name))
     db().commit()
+
+
+def update_user_profile(user_id: int, updates: dict) -> Optional[sqlite3.Row]:
+    allowed_cols = {"display_name", "email", "image", "employee_id", "department", "designation", "dob", "gender"}
+    fields = {k: v for k, v in updates.items() if k in allowed_cols}
+    if not fields:
+        return get_user_by_id(user_id)
+    set_clause = ", ".join(f"{k} = ?" for k in fields.keys())
+    values = list(fields.values()) + [user_id]
+    db().execute(f"UPDATE users SET {set_clause} WHERE id = ?", tuple(values))
+    db().commit()
+    return get_user_by_id(user_id)
+

@@ -75,6 +75,7 @@ def db_list_sessions_page(pid: Optional[int], owner_user_id: int, limit: Optiona
         "created_at": r["created_at"],
         "agent_id": r["agent_id"] if "agent_id" in r.keys() else None,
         "model": _clean_model_name(r["model"]) if "model" in r.keys() else None,
+        "is_pinned": bool(r["is_pinned"]) if "is_pinned" in r.keys() and r["is_pinned"] else False,
     } for r in rows], has_more)
 
 
@@ -118,6 +119,52 @@ def db_update_session_model(sid: int, model: Optional[str], owner_user_id: int) 
         raise PermissionError("not your session")
     _projects_db.execute("UPDATE sessions SET model = ? WHERE id = ?", (_clean_model_name(model), sid))
     _projects_db.commit()
+
+
+def _has_pinned_column() -> bool:
+    try:
+        cols = [col[1] for col in _projects_db.execute("PRAGMA table_info(sessions)").fetchall()]
+        return "is_pinned" in cols
+    except Exception:
+        return False
+
+
+def db_update_session_pinned(sid: int, is_pinned: bool, owner_user_id: int) -> None:
+    if db_session_owner(sid) != owner_user_id:
+        raise PermissionError("not your session")
+    _projects_db.execute("UPDATE sessions SET is_pinned = ? WHERE id = ?", (1 if is_pinned else 0, sid))
+    _projects_db.commit()
+
+
+def db_search_sessions(owner_user_id: int, query: str, limit: int = 50) -> list:
+    """Search sessions by matching query in title OR message contents."""
+    q_str = (query or "").strip()
+    if not q_str:
+        return []
+    needle = f"%{q_str}%"
+    pin_col = "s.is_pinned" if _has_pinned_column() else "0 AS is_pinned"
+    pin_order = "s.is_pinned DESC," if _has_pinned_column() else ""
+    sql = f"""
+        SELECT DISTINCT s.id, s.title, s.created_at, s.agent_id, s.model, {pin_col}, s.project_id,
+               COALESCE((SELECT MAX(m.created_at) FROM messages m WHERE m.session_id = s.id), s.created_at) AS last_at
+        FROM sessions s
+        LEFT JOIN messages m ON m.session_id = s.id
+        WHERE s.user_id = ? AND (s.title LIKE ? OR m.content LIKE ?)
+        ORDER BY {pin_order} last_at DESC
+        LIMIT ?
+    """
+    rows = list(_projects_db.execute(sql, (owner_user_id, needle, needle, limit)))
+    return [{
+        "id": r["id"],
+        "title": r["title"],
+        "created_at": r["created_at"],
+        "last_at": r["last_at"],
+        "agent_id": r["agent_id"] if "agent_id" in r.keys() else None,
+        "project_id": r["project_id"] if "project_id" in r.keys() else None,
+        "model": _clean_model_name(r["model"]) if "model" in r.keys() else None,
+        "is_pinned": bool(r["is_pinned"]) if "is_pinned" in r.keys() and r["is_pinned"] else False,
+    } for r in rows]
+
 
 
 def db_delete_session(sid: int, owner_user_id: int, is_super_admin: bool = False) -> None:
@@ -301,8 +348,9 @@ def db_session_groups(owner_user_id: int, kind: str, group_ids: list, per_group:
     col = "agent_id" if kind == "agent" else "project_id"
     extra = " AND s.project_id IS NULL" if kind == "agent" else ""
     marks = ",".join("?" for _ in ids)
+    pin_col = "s.is_pinned" if _has_pinned_column() else "0 AS is_pinned"
     rows = _projects_db.execute(
-        f"""SELECT s.id, s.title, s.created_at, s.agent_id, s.project_id, s.model,
+        f"""SELECT s.id, s.title, s.created_at, s.agent_id, s.project_id, s.model, {pin_col},
                    COALESCE((SELECT MAX(m.created_at) FROM messages m WHERE m.session_id = s.id), s.created_at) AS last_at
             FROM sessions s WHERE s.user_id = ? AND s.{col} IN ({marks}){extra}""",
         (owner_user_id, *ids))
@@ -311,9 +359,10 @@ def db_session_groups(owner_user_id: int, kind: str, group_ids: list, per_group:
     for r in rows:
         buckets.setdefault(str(r[col]), []).append(r)
     for gid, rs in buckets.items():
-        rs.sort(key=lambda r: (r["last_at"] or 0, r["id"]), reverse=True)
+        rs.sort(key=lambda r: (r["is_pinned"] or 0, r["last_at"] or 0, r["id"]), reverse=True)
         out[gid] = {"total": len(rs), "sessions": [{
             "id": r["id"], "title": r["title"], "created_at": r["created_at"], "last_at": r["last_at"],
             "agent_id": r["agent_id"], "project_id": r["project_id"], "model": _clean_model_name(r["model"]),
+            "is_pinned": bool(r["is_pinned"]) if "is_pinned" in r.keys() and r["is_pinned"] else False,
         } for r in rs[:per]]}
     return out

@@ -11,7 +11,7 @@ interface UserMenuProps {
 const THEMES = ['slate', 'claude', 'tokyonight', 'light'];
 
 export const UserMenu: React.FC<UserMenuProps> = ({ user, onClose }) => {
-  const { theme, setTheme, openSettingsModal, setActiveModal, logout } = useAppStore();
+  const { theme, setTheme, openSettingsModal, setActiveModal, openProfileModal, logout } = useAppStore();
   const [showPwdForm, setShowPwdForm] = useState(false);
   const [currentPwd, setCurrentPwd] = useState('');
   const [newPwd, setNewPwd] = useState('');
@@ -82,6 +82,20 @@ export const UserMenu: React.FC<UserMenuProps> = ({ user, onClose }) => {
       }}
       onClick={(e) => e.stopPropagation()}
     >
+      {/* Profile item */}
+      <button
+        type="button"
+        className="user-menu-item"
+        onClick={(e) => handleAction(e, () => openProfileModal())}
+        title="View and update your profile"
+      >
+        <svg className="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+          <circle cx="12" cy="7" r="4" />
+        </svg>
+        <span>My Profile</span>
+      </button>
+
       {/* Theme item */}
       <button
         type="button"

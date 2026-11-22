@@ -17,6 +17,7 @@ import { SettingsModal } from './components/modals/SettingsModal';
 import { ReportModal } from './components/modals/ReportModal';
 import { AuditModal } from './components/modals/AuditModal';
 import { DbModal } from './components/modals/DbModal';
+import { ProfileModal } from './components/modals/ProfileModal';
 import { LoginPage } from './components/auth/LoginPage';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { logger } from './utils/logger';
@@ -121,7 +122,15 @@ export function App() {
 
       fetchModels();
       fetchProjects();
-      fetchSessions();
+      fetchSessions().then(() => {
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const sharedSession = params.get('session');
+          if (sharedSession) {
+            void useAppStore.getState().openSession(sharedSession);
+          }
+        } catch (_) {}
+      });
     }
   }, [isAuthenticated, fetchModels, fetchProjects, fetchSessions]);
 
@@ -238,6 +247,14 @@ export function App() {
     return (
       <ErrorBoundary fallbackTitle="Database Explorer">
         <DbModal />
+      </ErrorBoundary>
+    );
+  }
+
+  if (activeModal === 'profile') {
+    return (
+      <ErrorBoundary fallbackTitle="User Profile">
+        <ProfileModal onClose={() => setActiveModal('none')} />
       </ErrorBoundary>
     );
   }

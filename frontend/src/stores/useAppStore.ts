@@ -12,7 +12,7 @@ export type AppMode = 'chat' | 'agent' | 'code';
 export type AgentMode = 'auto' | 'manual' | 'accept_edits' | 'plan' | 'bypass';
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'extra';
 export type DockTab = 'plan' | 'tasks' | 'subagents' | 'files' | 'preview' | 'terminal';
-export type ActiveModal = 'none' | 'audit' | 'settings' | 'report' | 'db' | 'monitor' | 'customize' | 'docs' | 'preview';
+export type ActiveModal = 'none' | 'audit' | 'settings' | 'report' | 'db' | 'monitor' | 'customize' | 'docs' | 'preview' | 'profile';
 
 export interface SubagentInfo {
   id: string;
@@ -135,8 +135,11 @@ export interface SessionItem {
   id: string | number;
   title: string;
   updatedAt?: string;
+  createdAt?: number;
+  created_at?: number | string;
   active?: boolean;
   model?: string | null;   // the model this chat was last used with
+  is_pinned?: boolean;
 }
 
 interface AppState {
@@ -271,6 +274,9 @@ interface AppState {
   abortGeneration: () => void;
   setActiveModal: (modal: ActiveModal) => void;
   openSettingsModal: (tab?: string) => void;
+  isReadOnlyShare: boolean;
+  pinSession: (id: string | number, isPinned: boolean) => Promise<boolean>;
+  openProfileModal: () => void;
   openCustomizeModal: (tab?: 'skills' | 'connectors' | 'plugins' | 'agents') => void;
   hasPerm: (permission: string) => boolean;
 }
@@ -391,12 +397,30 @@ function filterRawSessions(rawSessions: any[], appMode: AppMode, activeCustomAge
 // the dock's Preview belongs to the chat it was opened from: a new or different chat starts with it empty
 const EMPTY_PREVIEW: PreviewModalState = { isOpen: false, filePath: '', title: '', directContent: null, source: 'common' };
 
+export function generateTopicTitle(prompt: string): string {
+  if (!prompt) return 'New Chat';
+  let clean = prompt.trim();
+  clean = clean.replace(/```[\s\S]*?```/g, '').replace(/^[#>\-\*\s]+/g, '').trim();
+  clean = clean.replace(/^(act as an?|act as|pretend you are an?|you are an?)\s+([a-zA-Z\s]+?)(?:[.,:;\n]+|\s+and\s+|\s+to\s+)/i, '');
+  clean = clean.replace(/^(please\s+)?(help\s+me\s+)?(write|create|draft|generate|provide|build|make|summarise|summarize|explain|show\s+me)\s+(a\s+|an\s+|the\s+)?/i, '');
+  clean = clean.replace(/^(can\s+you\s+)(please\s+)?(help\s+me\s+)?(write|create|draft|generate|provide|build|make|summarise|summarize|explain)\s+(a\s+|an\s+|the\s+)?/i, '');
+  clean = clean.replace(/^(here\s+is\s+(a\s+|an\s+|the\s+)?)/i, '');
+  clean = clean.replace(/^(i\s+want\s+you\s+to\s+|i\s+need\s+(a\s+|an\s+|to\s+)?)/i, '');
+  const firstSentence = clean.split(/[.\n;!?]/)[0].trim();
+  const finalTitle = firstSentence || clean;
+  if (!finalTitle) return 'New Chat';
+  const formatted = finalTitle.charAt(0).toUpperCase() + finalTitle.slice(1);
+  return formatted.length > 32 ? formatted.slice(0, 32).trim() + '…' : formatted;
+}
+
 function formatSessionItem(s: any, appMode: AppMode, activeSessionId: string | number | null): SessionItem {
-  const ts = s.created_at || s.updated_at;
+  const ts = s.last_at || s.updated_at || s.created_at;
   let dateStr = 'Recent';
+  let createdMs = 0;
   if (ts) {
     const ms = typeof ts === 'number' ? (ts < 1e11 ? ts * 1000 : ts) : Date.parse(ts);
     if (!isNaN(ms)) {
+      createdMs = ms;
       dateStr = new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
   }
@@ -404,8 +428,11 @@ function formatSessionItem(s: any, appMode: AppMode, activeSessionId: string | n
     id: s.id,
     title: s.title || s.name || (appMode === 'code' ? 'Task' : 'Chat'),
     updatedAt: dateStr,
+    createdAt: createdMs || (typeof s.created_at === 'number' ? (s.created_at < 1e11 ? s.created_at * 1000 : s.created_at) : undefined),
+    created_at: s.created_at,
     active: activeSessionId === s.id,
     model: s.model ? cleanModelName(s.model) : null,
+    is_pinned: Boolean(s.is_pinned),
   };
 }
 
@@ -452,6 +479,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   hasMoreSessions: false,
   isLoadingMoreSessions: false,
   activeSessionId: null,
+  isReadOnlyShare: false,
   messages: [],
   sessionFilter: '',
 
@@ -1086,7 +1114,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (isBusy(key)) return;
 
     try {
-      const rawMsgs = await api.sessions.getMessages(id);
+      const resp = await api.sessions.getMessages(id);
+      const rawMsgs = resp.messages || [];
+      const isOwner = resp.is_owner ?? true;
+      set({ isReadOnlyShare: !isOwner });
       const formatted: ChatMessage[] = rawMsgs.map((m: any, idx: number) => {
         const meta = m.meta || {};
         let timeStr = meta.timeStr || '';
@@ -1147,6 +1178,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const prev = get();
     set((state) => ({
       activeSessionId: null,
+      isReadOnlyShare: false,
       previewModal: EMPTY_PREVIEW,
       messages: [],
       isStreaming: false,
@@ -1377,7 +1409,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // If no active session, ensure/create one now with first prompt title
     if (!currentSessionId) {
-      let title = text.trim().slice(0, 48) || (options?.files ? options.files.slice(0, 48) : 'New Chat');
+      let title = generateTopicTitle(text) || (options?.files ? options.files.slice(0, 32) : 'New Chat');
       const pid = appMode === 'code' && activeProjectId ? activeProjectId : 0;
       let agentId: string | number | undefined = undefined;
       if (appMode === 'agent' && get().activeCustomAgent) {
@@ -1904,6 +1936,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       window.history.pushState({ modal: 'settings' }, '', `/settings#${settingsTab}`);
     } catch (_) {}
     set({ activeModal: 'settings', settingsTab });
+  },
+  openProfileModal: () => {
+    set({ activeModal: 'profile' });
+  },
+  pinSession: async (id: string | number, isPinned: boolean) => {
+    const ok = await api.sessions.pin(id, isPinned);
+    if (ok) {
+      set((st) => ({
+        sessions: st.sessions.map((s) => (s.id === id ? { ...s, is_pinned: isPinned } : s)),
+      }));
+    }
+    return ok;
   },
   openCustomizeModal: (customizeTab = 'skills') => {
     set({ activeModal: 'customize', customizeTab });

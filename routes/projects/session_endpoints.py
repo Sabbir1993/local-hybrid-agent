@@ -17,6 +17,10 @@ from core.db import (
     db_update_session_title,
     db_update_session_agent_id,
     db_update_session_model,
+    db_update_session_pinned,
+    db_search_sessions,
+    _projects_db,
+    _load_meta,
 )
 from core.deps import get_current_user
 from .models import ForkReq, MessageReq, SessionReq, SessionMemoryReq
@@ -60,6 +64,11 @@ async def create_session(pid: int, req: SessionReq, user: Principal = Depends(ge
     return {"ok": True, "session": s}
 
 
+@router.get("/control/sessions/search")
+async def search_sessions(q: str = "", user: Principal = Depends(get_current_user)):
+    return {"sessions": db_search_sessions(user.id, q)}
+
+
 @router.patch("/control/sessions/{sid}")
 async def update_session(sid: int, req: SessionReq, user: Principal = Depends(get_current_user)):
     try:
@@ -69,6 +78,8 @@ async def update_session(sid: int, req: SessionReq, user: Principal = Depends(ge
             db_update_session_agent_id(sid, req.agent_id, owner_user_id=user.id)
         if req.model is not None:
             db_update_session_model(sid, req.model, owner_user_id=user.id)
+        if req.is_pinned is not None:
+            db_update_session_pinned(sid, req.is_pinned, owner_user_id=user.id)
     except PermissionError:
         return JSONResponse({"error": "session not found"}, status_code=404)
     except Exception as e:
@@ -88,8 +99,17 @@ async def delete_session(sid: int, user: Principal = Depends(get_current_user)):
 @router.get("/control/sessions/{sid}/messages")
 async def get_messages(sid: int, user: Principal = Depends(get_current_user)):
     try:
-        return {"messages": db_load_messages(sid, owner_user_id=user.id)}
+        msgs = db_load_messages(sid, owner_user_id=user.id)
+        return {"messages": msgs, "is_owner": True}
     except PermissionError:
+        # Check if the session exists (e.g. shared link view for visitor)
+        row = _projects_db.execute("SELECT id, user_id, title FROM sessions WHERE id = ?", (sid,)).fetchone()
+        if row is not None:
+            raw_msgs = [
+                {"role": r["role"], "content": r["content"], "meta": _load_meta(r["meta"]), "created_at": r["created_at"]}
+                for r in _projects_db.execute("SELECT * FROM messages WHERE session_id = ? ORDER BY id", (sid,))
+            ]
+            return {"messages": raw_msgs, "is_owner": False, "title": row["title"]}
         return JSONResponse({"error": "session not found"}, status_code=404)
 
 

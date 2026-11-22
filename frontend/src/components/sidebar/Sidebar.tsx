@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useAppStore } from '../../stores/useAppStore';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useAppStore, type SessionItem } from '../../stores/useAppStore';
 import { DeviceRename } from './DeviceRename';
 import { UserMenu } from './UserMenu';
 import { SessionTree, type TreeGroup } from './SessionTree';
 import { api, apiFetch, getClientDeviceId } from '../../services/api';
 import { useMediaQuery, NARROW_QUERY } from '../../hooks/useMediaQuery';
 import { env } from '../../config/env';
+import { Pin, PinOff, Pencil, Share2, Download, Trash2, AlertTriangle } from 'lucide-react';
 
 export const Sidebar: React.FC = () => {
   const {
@@ -57,6 +58,9 @@ export const Sidebar: React.FC = () => {
   const [showSearch, setShowSearch] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [menuState, setMenuState] = useState<{ x: number; y: number; sid: string | number; title: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ sid: string | number; title: string } | null>(null);
+  const [searchResults, setSearchResults] = useState<SessionItem[] | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
   const userMenuPillRef = useRef<HTMLDivElement>(null);
   const sessionMenuRef = useRef<HTMLDivElement>(null);
 
@@ -70,11 +74,44 @@ export const Sidebar: React.FC = () => {
     bumpAgents,
     showToast,
     openSettingsModal,
+    pinSession,
   } = useAppStore();
 
   useEffect(() => {
     fetchSessions();
   }, [fetchSessions]);
+
+  // Debounced search across content & titles
+  useEffect(() => {
+    const q = (sessionFilter || '').trim();
+    if (!q) {
+      setSearchResults(null);
+      setIsSearching(false);
+      return;
+    }
+    setIsSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const raw = await api.sessions.search(q);
+        const mapped: SessionItem[] = raw.map((s: any) => ({
+          id: s.id,
+          title: s.title,
+          updatedAt: s.last_at ? new Date(s.last_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent',
+          createdAt: s.last_at ? s.last_at * 1000 : (s.created_at ? s.created_at * 1000 : undefined),
+          created_at: s.created_at,
+          active: s.id === activeSessionId,
+          model: s.model || null,
+          is_pinned: Boolean(s.is_pinned),
+        }));
+        setSearchResults(mapped);
+      } catch (_) {
+        setSearchResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [sessionFilter, activeSessionId]);
 
   useEffect(() => {
     apiFetch('/custom-agents')
@@ -103,7 +140,7 @@ export const Sidebar: React.FC = () => {
     return () => { delete (window as any).loadCustomAgents; };
   }, [bumpAgents]);
 
-  // Close menus on outside click
+  // Close menus on outside click and keyboard shortcuts (P for Pin, R for Rename)
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       if (userMenuPillRef.current && !userMenuPillRef.current.contains(e.target as Node)) {
@@ -113,11 +150,26 @@ export const Sidebar: React.FC = () => {
         setMenuState(null);
       }
     };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!menuState) return;
+      if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        const activeItem = (sessions || []).find((s) => s.id === menuState.sid) || (searchResults || []).find((s) => s.id === menuState.sid);
+        handleTogglePin(menuState.sid, Boolean(activeItem?.is_pinned));
+      } else if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        handleRename(menuState.sid, menuState.title);
+      } else if (e.key === 'Escape') {
+        setMenuState(null);
+      }
+    };
     document.addEventListener('click', handleOutsideClick);
+    window.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('click', handleOutsideClick);
+      window.removeEventListener('keydown', handleKeyDown);
     };
-  }, []);
+  }, [menuState, sessions, searchResults]);
 
   const handleMenuClick = (e: React.MouseEvent, s: any) => {
     e.stopPropagation();
@@ -126,11 +178,48 @@ export const Sidebar: React.FC = () => {
       return;
     }
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const width = 140;
+    const width = 170;
     let left = rect.right - width;
     left = Math.max(6, Math.min(left, window.innerWidth - width - 6));
     let top = rect.bottom + 4;
     setMenuState({ x: left, y: top, sid: s.id, title: s.title });
+  };
+
+  const handleTogglePin = async (sid: string | number, isPinned: boolean) => {
+    setMenuState(null);
+    const ok = await pinSession(sid, !isPinned);
+    if (ok) {
+      showToast(isPinned ? 'Chat unpinned' : 'Chat pinned', 'info');
+      fetchSessions();
+    } else {
+      showToast('Could not update pin status', 'error');
+    }
+  };
+
+  const handleRename = async (sid: string | number, currentTitle: string) => {
+    setMenuState(null);
+    const next = window.prompt('Rename chat:', currentTitle);
+    if (!next || !next.trim() || next.trim() === currentTitle) return;
+    const r = await apiFetch(`/control/sessions/${sid}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: next.trim() }),
+    });
+    if (r.ok) {
+      fetchSessions();
+      showToast('Chat renamed', 'success');
+    } else {
+      showToast('Rename failed', 'error');
+    }
+  };
+
+  const handleShare = (sid: string | number) => {
+    setMenuState(null);
+    const url = `${window.location.origin}/?session=${sid}&share=1`;
+    navigator.clipboard.writeText(url).then(
+      () => showToast('Shareable link copied to clipboard!', 'success'),
+      () => showToast(`Share URL: ${url}`, 'info'),
+    );
   };
 
   const handleExportSession = async (sid: string | number, titleHint: string) => {
@@ -165,6 +254,7 @@ export const Sidebar: React.FC = () => {
   const handleDeleteSession = async (sid: string | number) => {
     setMenuState(null);
     await deleteSession(sid);
+    showToast('Chat deleted', 'info');
   };
 
   const handleSessionScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -173,12 +263,6 @@ export const Sidebar: React.FC = () => {
       fetchMoreSessions();
     }
   };
-
-  const filteredSessions = (sessions || []).filter((s) => {
-    const title = s?.title || '';
-    const q = sessionFilter || '';
-    return title.toLowerCase().includes(q.toLowerCase());
-  });
 
   const nameToUse = currentUser?.display_name || currentUser?.username || 'Sabbir Hossain';
   const initials = nameToUse
@@ -189,7 +273,47 @@ export const Sidebar: React.FC = () => {
     .toUpperCase() || 'SH';
 
   const isSuperAdmin = currentUser?.is_super_admin ?? true;
-  const userRoleDisplay = isSuperAdmin ? 'SUPER ADMIN' : (currentUser?.roles?.join(', ') || 'USER');
+  const userRoleDisplay = currentUser?.designation
+    ? `${currentUser.designation}${currentUser.department ? ` · ${currentUser.department}` : ''}`
+    : (isSuperAdmin ? 'SUPER ADMIN' : (currentUser?.roles?.join(', ') || 'USER'));
+
+  const dateGroups = useMemo(() => {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const yesterdayStart = todayStart - 86400 * 1000;
+    const last7DaysStart = todayStart - 7 * 86400 * 1000;
+
+    const pinned: SessionItem[] = [];
+    const today: SessionItem[] = [];
+    const yesterday: SessionItem[] = [];
+    const previousDays: SessionItem[] = [];
+    const older: SessionItem[] = [];
+
+    (sessions || []).forEach((s) => {
+      if (s.is_pinned) {
+        pinned.push(s);
+        return;
+      }
+      const ts = s.createdAt || (typeof s.created_at === 'number' ? (s.created_at < 1e11 ? s.created_at * 1000 : s.created_at) : 0);
+      if (!ts || ts >= todayStart) {
+        today.push(s);
+      } else if (ts >= yesterdayStart) {
+        yesterday.push(s);
+      } else if (ts >= last7DaysStart) {
+        previousDays.push(s);
+      } else {
+        older.push(s);
+      }
+    });
+
+    const groups: { label: string; items: SessionItem[] }[] = [];
+    if (pinned.length) groups.push({ label: 'Pinned', items: pinned });
+    if (today.length) groups.push({ label: 'Today', items: today });
+    if (yesterday.length) groups.push({ label: 'Yesterday', items: yesterday });
+    if (previousDays.length) groups.push({ label: 'Previous 7 Days', items: previousDays });
+    if (older.length) groups.push({ label: 'Older', items: older });
+    return groups;
+  }, [sessions]);
 
   const filterBar = (
     <div className="session-filter-bar" id="session-filter-bar">
@@ -439,62 +563,147 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
           onScroll={handleSessionScroll}
           style={{ position: 'relative' }}
         >
-          {filteredSessions.length === 0 ? (
-            <div className="dim" style={{ fontSize: '12px', padding: '12px 6px', textAlign: 'center' }}>
-              no chats yet
-            </div>
-          ) : (
-            filteredSessions.map((s) => (
-              <div
-                key={String(s.id)}
-                className={`session-row ${s.id === activeSessionId ? 'cur' : ''}`}
-                data-sid={String(s.id)}
-                onClick={() => { openSession(s.id); closeIfNarrow(); }}
-                style={{ position: 'relative' }}
-              >
-                <span
-                  style={{
-                    flex: 1,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    display: 'flex',
-                    alignItems: 'center',
-                  }}
-                  title={s.title}
-                >
-                  {(
-                    <svg
-                      className="session-icon"
-                      width="13"
-                      height="13"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      style={{ flexShrink: 0, verticalAlign: '-2px', marginRight: '6px', opacity: 0.85 }}
-                    >
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                    </svg>
-                  )}
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {s.title}
-                  </span>
-                </span>
-
-                {runningSessions[String(s.id)] && (
-                  <span title="Still working in the background" aria-label="Running" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--warm, #ffb454)', marginRight: 6, flexShrink: 0, animation: 'pulse-op 1.6s ease-in-out infinite' }} />
-                )}
-                <span
-                  className="s-menu-wrap"
-                  onClick={(e) => handleMenuClick(e, s)}
-                >
-                  <span className={`s-menu ${menuState?.sid === s.id ? 'open' : ''}`} title="Session options">⋮</span>
-                </span>
+          {sessionFilter.trim() ? (
+            isSearching ? (
+              <div className="dim" style={{ fontSize: '12px', padding: '14px 6px', textAlign: 'center' }}>
+                Searching chats…
               </div>
-            ))
+            ) : (searchResults || []).length === 0 ? (
+              <div className="dim" style={{ fontSize: '12px', padding: '14px 6px', textAlign: 'center' }}>
+                No matching chats
+              </div>
+            ) : (
+              (searchResults || []).map((s) => (
+                <div
+                  key={String(s.id)}
+                  className={`session-row ${s.id === activeSessionId ? 'cur' : ''}`}
+                  data-sid={String(s.id)}
+                  onClick={() => { openSession(s.id); closeIfNarrow(); }}
+                  style={{ position: 'relative' }}
+                >
+                  <span
+                    style={{
+                      flex: 1,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      display: 'flex',
+                      alignItems: 'center',
+                    }}
+                    title={s.title}
+                  >
+                    {s.is_pinned ? (
+                      <Pin size={12} style={{ flexShrink: 0, marginRight: '6px', opacity: 0.9, color: 'var(--accent, #818cf8)' }} />
+                    ) : (
+                      <svg
+                        className="session-icon"
+                        width="13"
+                        height="13"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        style={{ flexShrink: 0, verticalAlign: '-2px', marginRight: '6px', opacity: 0.85 }}
+                      >
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                      </svg>
+                    )}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {s.title}
+                    </span>
+                  </span>
+
+                  {runningSessions[String(s.id)] && (
+                    <span title="Still working in the background" aria-label="Running" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--warm, #ffb454)', marginRight: 6, flexShrink: 0, animation: 'pulse-op 1.6s ease-in-out infinite' }} />
+                  )}
+                  <span
+                    className="s-menu-wrap"
+                    onClick={(e) => handleMenuClick(e, s)}
+                  >
+                    <span className={`s-menu ${menuState?.sid === s.id ? 'open' : ''}`} title="Session options">⋮</span>
+                  </span>
+                </div>
+              ))
+            )
+          ) : (
+            (sessions || []).length === 0 ? (
+              <div className="dim" style={{ fontSize: '12px', padding: '14px 6px', textAlign: 'center' }}>
+                No chats yet
+              </div>
+            ) : (
+              dateGroups.map((group) => (
+                <div key={group.label} className="session-date-group" style={{ marginBottom: 4 }}>
+                  <div
+                    style={{
+                      fontSize: '10px',
+                      fontWeight: 600,
+                      color: 'var(--dim)',
+                      padding: '8px 10px 4px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
+                      opacity: 0.75,
+                    }}
+                  >
+                    {group.label}
+                  </div>
+                  {group.items.map((s) => (
+                    <div
+                      key={String(s.id)}
+                      className={`session-row ${s.id === activeSessionId ? 'cur' : ''}`}
+                      data-sid={String(s.id)}
+                      onClick={() => { openSession(s.id); closeIfNarrow(); }}
+                      style={{ position: 'relative' }}
+                    >
+                      <span
+                        style={{
+                          flex: 1,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          display: 'flex',
+                          alignItems: 'center',
+                        }}
+                        title={s.title}
+                      >
+                        {s.is_pinned ? (
+                          <Pin size={12} style={{ flexShrink: 0, marginRight: '6px', opacity: 0.9, color: 'var(--accent, #818cf8)' }} />
+                        ) : (
+                          <svg
+                            className="session-icon"
+                            width="13"
+                            height="13"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            style={{ flexShrink: 0, verticalAlign: '-2px', marginRight: '6px', opacity: 0.85 }}
+                          >
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                          </svg>
+                        )}
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {s.title}
+                        </span>
+                      </span>
+
+                      {runningSessions[String(s.id)] && (
+                        <span title="Still working in the background" aria-label="Running" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--warm, #ffb454)', marginRight: 6, flexShrink: 0, animation: 'pulse-op 1.6s ease-in-out infinite' }} />
+                      )}
+                      <span
+                        className="s-menu-wrap"
+                        onClick={(e) => handleMenuClick(e, s)}
+                      >
+                        <span className={`s-menu ${menuState?.sid === s.id ? 'open' : ''}`} title="Session options">⋮</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ))
+            )
           )}
           {isLoadingMoreSessions && (
             <div className="dim" style={{ fontSize: '11px', padding: '10px 6px', textAlign: 'center', opacity: 0.7 }}>
@@ -505,62 +714,116 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
 
         </>)}
 
-        {/* Floating Session Options Context Menu (Matching Image 1) */}
-        {menuState && (
-          <div
-            ref={sessionMenuRef}
-            className="s-menu-pop"
-            style={{
-              position: 'fixed',
-              left: `${menuState.x}px`,
-              top: `${menuState.y}px`,
-              zIndex: 9999,
-              background: 'var(--panel, #1a1917)',
-              border: '1px solid var(--border-subtle, rgba(255, 255, 255, 0.12))',
-              borderRadius: '8px',
-              padding: '4px',
-              boxShadow: '0 8px 24px rgba(0, 0, 0, 0.45)',
-              minWidth: '140px',
-              display: 'flex',
-              flexDirection: 'column',
-              animation: 'claudePopIn 0.12s cubic-bezier(0.16, 1, 0.3, 1)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              type="button"
-              onClick={() => handleExportSession(menuState.sid, menuState.title)}
-            >
-              <span className="mi">📄</span>
-              <span>Export .md</span>
-            </button>
-            <button
-              type="button"
-              onClick={async () => {
-                const sid = menuState.sid;
-                const next = window.prompt('Rename chat:', menuState.title);
-                setMenuState(null);
-                if (!next || !next.trim() || next.trim() === menuState.title) return;
-                const r = await apiFetch(`/control/sessions/${sid}`, {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ title: next.trim() }),
-                });
-                if (r.ok) fetchSessions();
-                else showToast('Rename failed', 'error');
+        {/* Floating Session Options Context Menu (Matching Image 6) */}
+        {menuState && (() => {
+          const currentItem = (sessions || []).find((s) => s.id === menuState.sid) || (searchResults || []).find((s) => s.id === menuState.sid);
+          const isPinned = Boolean(currentItem?.is_pinned);
+          return (
+            <div
+              ref={sessionMenuRef}
+              className="s-menu-pop"
+              style={{
+                position: 'fixed',
+                left: `${menuState.x}px`,
+                top: `${menuState.y}px`,
+                zIndex: 9999,
+                background: 'var(--panel2, #18181b)',
+                border: '1px solid var(--border-subtle, rgba(255, 255, 255, 0.12))',
+                borderRadius: '10px',
+                padding: '5px',
+                boxShadow: '0 12px 30px rgba(0, 0, 0, 0.5)',
+                minWidth: '155px',
+                display: 'flex',
+                flexDirection: 'column',
+                animation: 'claudePopIn 0.12s cubic-bezier(0.16, 1, 0.3, 1)',
               }}
+              onClick={(e) => e.stopPropagation()}
             >
-              <span className="mi">✏️</span>
-              <span>Rename</span>
-            </button>
-            <button
-              type="button"
-              className="danger"
-              onClick={() => handleDeleteSession(menuState.sid)}
-            >
-              <span className="mi">🗑</span>
-              <span>Delete</span>
-            </button>
+              <button
+                type="button"
+                className="s-menu-item-row"
+                onClick={() => handleTogglePin(menuState.sid, isPinned)}
+              >
+                {isPinned ? <PinOff size={14} className="s-icon" /> : <Pin size={14} className="s-icon" />}
+                <span className="s-label">{isPinned ? 'Unpin' : 'Pin'}</span>
+                <span className="s-shortcut">P</span>
+              </button>
+              <button
+                type="button"
+                className="s-menu-item-row"
+                onClick={() => handleRename(menuState.sid, menuState.title)}
+              >
+                <Pencil size={14} className="s-icon" />
+                <span className="s-label">Rename</span>
+                <span className="s-shortcut">R</span>
+              </button>
+              <button
+                type="button"
+                className="s-menu-item-row"
+                onClick={() => handleShare(menuState.sid)}
+              >
+                <Share2 size={14} className="s-icon" />
+                <span className="s-label">Share</span>
+              </button>
+              <button
+                type="button"
+                className="s-menu-item-row"
+                onClick={() => handleExportSession(menuState.sid, menuState.title)}
+              >
+                <Download size={14} className="s-icon" />
+                <span className="s-label">Export .md</span>
+              </button>
+              <div style={{ height: '1px', background: 'var(--border-subtle, rgba(255, 255, 255, 0.08))', margin: '4px 2px' }} />
+              <button
+                type="button"
+                className="s-menu-item-row danger"
+                onClick={() => {
+                  const toDel = { sid: menuState.sid, title: menuState.title };
+                  setMenuState(null);
+                  setConfirmDelete(toDel);
+                }}
+              >
+                <Trash2 size={14} className="s-icon" />
+                <span className="s-label">Delete</span>
+              </button>
+            </div>
+          );
+        })()}
+
+        {/* Delete Confirmation Modal */}
+        {confirmDelete && (
+          <div className="ca-modal-overlay" style={{ display: 'flex' }} onClick={() => setConfirmDelete(null)}>
+            <div className="ca-modal-box" style={{ maxWidth: 380, padding: '20px 22px' }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#f87171', marginBottom: 12 }}>
+                <AlertTriangle size={20} />
+                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: 'var(--text)' }}>Delete chat?</h3>
+              </div>
+              <p style={{ fontSize: 13, color: 'var(--dim)', margin: '0 0 20px 0', lineHeight: 1.5 }}>
+                Are you sure you want to delete <strong style={{ color: 'var(--text)' }}>"{confirmDelete.title}"</strong>? This will permanently delete this conversation and its history.
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => setConfirmDelete(null)}
+                  style={{ padding: '6px 14px', fontSize: 13 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn danger"
+                  style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '6px 16px', borderRadius: 6, fontWeight: 500, cursor: 'pointer', fontSize: 13 }}
+                  onClick={() => {
+                    const sid = confirmDelete.sid;
+                    setConfirmDelete(null);
+                    handleDeleteSession(sid);
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -577,7 +840,13 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
           setShowUserMenu(!showUserMenu);
         }}
       >
-        <div className="claude-avatar" id="claude-avatar-badge">{initials}</div>
+        <div className="claude-avatar" id="claude-avatar-badge" style={{ overflow: 'hidden' }}>
+          {currentUser?.image ? (
+            <img src={currentUser.image} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+          ) : (
+            initials
+          )}
+        </div>
         <div className="claude-profile-info">
           <span className="claude-profile-name" id="claude-user-name">
             {nameToUse}

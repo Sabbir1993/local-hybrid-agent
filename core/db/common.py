@@ -26,7 +26,8 @@ def _init_projects_db() -> ThreadLocalDB:
         title TEXT NOT NULL,
         created_at REAL NOT NULL,
         user_id INTEGER,
-        agent_id INTEGER
+        agent_id INTEGER,
+        is_pinned INTEGER DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,6 +121,8 @@ def _init_projects_db() -> ThreadLocalDB:
     # P2 fork/branch: a forked session points at the session it was copied from
     if "fork_of" not in session_cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN fork_of INTEGER")
+    if "is_pinned" not in session_cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN is_pinned INTEGER DEFAULT 0")
     plan_cols = [r[1] for r in conn.execute("PRAGMA table_info(plan_items)")]
     if "deps" not in plan_cols:
         conn.execute("ALTER TABLE plan_items ADD COLUMN deps TEXT DEFAULT '[]'")
