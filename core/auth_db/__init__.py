@@ -119,6 +119,7 @@ from .users import (
     remove_user_allow_pattern,
     touch_login,
     unlock_user,
+    update_user_profile,
     upsert_user_mcp_server,
 )
 
@@ -138,6 +139,7 @@ __all__ = [
     "get_user_by_id",
     "count_users",
     "create_user",
+    "update_user_profile",
     "touch_login",
     "record_failed_login",
     "unlock_user",

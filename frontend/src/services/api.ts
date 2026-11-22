@@ -228,7 +228,7 @@ export const api = {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data),
         });
-        const json = await res.json();
+        const json = await res.json().catch(() => ({ detail: res.statusText || 'Failed to update profile' }));
         if (!res.ok) return { ok: false, error: json.detail || 'Failed to update profile' };
         const u = json.user;
         const formatDisplayName = (rawDisp?: string, rawUser?: string) => {

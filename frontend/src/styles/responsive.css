@@ -110,15 +110,36 @@
     font-size: 16px !important;          /* 16px stops iOS zooming into the field */
   }
 
-  /* bar row: may wrap; both groups shrink; the model and reasoning chips stay together on the right */
+  /* bar row: single line layout; properly aligned on mobile */
   .claude-input-bar-row {
-    flex-wrap: wrap !important;
-    row-gap: 6px;
-    column-gap: 6px;
-    padding: 6px 2px 0 !important;
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 4px !important;
+    padding: 4px 2px 0 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
   }
-  .claude-bar-left { gap: 2px !important; min-width: 0; flex-shrink: 1; }
-  .claude-bar-right { gap: 6px !important; min-width: 0; margin-left: auto; }
+  .claude-bar-left {
+    display: flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    min-width: 0 !important;
+    flex-shrink: 0 !important;
+  }
+  .claude-bar-right {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+    gap: 4px !important;
+    min-width: 0 !important;
+    flex-shrink: 1 !important;
+    margin-left: auto !important;
+    overflow: hidden !important;
+  }
   /* one row: [+] [⋯] ........ [model] [reasoning] [context] - voice, web and KB move into the ⋯ sheet */
   #btn-composer-more {
     display: inline-flex !important;
@@ -200,18 +221,92 @@
   .composer-more-tools.open > .claude-mic-split-wrap .composer-more-label { order: 0; }
   .composer-more-tools.open .comp-kb-btn .comp-kb-tag { order: 2; margin-left: auto; }
 
-  /* model and reasoning chips */
-  #btn-claude-model,
+  /* model, reasoning and tool chips in single line toolbar */
+  #btn-attach,
+  #btn-composer-more {
+    width: 28px !important;
+    height: 28px !important;
+    min-width: 28px !important;
+    padding: 4px !important;
+    flex-shrink: 0 !important;
+  }
+  #model-picker-wrap {
+    min-width: 0 !important;
+    flex-shrink: 1 !important;
+    display: flex !important;
+    align-items: center !important;
+  }
+  #btn-claude-model {
+    border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.25)) !important;
+    border-radius: 999px !important;
+    padding: 3px 8px !important;
+    min-height: 28px !important;
+    height: 28px !important;
+    font-size: 11.5px !important;
+    color: var(--text) !important;
+    background: var(--panel2, rgba(255, 255, 255, 0.04)) !important;
+    min-width: 0 !important;
+    flex-shrink: 1 !important;
+    max-width: 140px !important;
+    white-space: nowrap !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 3px !important;
+    box-sizing: border-box !important;
+  }
+  #claude-model-text {
+    min-width: 0 !important;
+    max-width: clamp(65px, 25vw, 100px) !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    display: inline-block !important;
+    vertical-align: middle !important;
+  }
+  #effort-wrap {
+    flex-shrink: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+  }
   #effort-btn {
     border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.25)) !important;
     border-radius: 999px !important;
-    padding: 4px 10px !important;
-    min-height: 36px;
-    font-size: 12.5px !important;
+    padding: 3px 8px !important;
+    min-height: 28px !important;
+    height: 28px !important;
+    font-size: 11.5px !important;
     color: var(--text) !important;
     background: var(--panel2, rgba(255, 255, 255, 0.04)) !important;
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 3px !important;
+    box-sizing: border-box !important;
   }
-  #claude-model-text { max-width: 32vw !important; }
+  #effort-label {
+    max-width: 85px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    display: inline-block !important;
+    vertical-align: middle !important;
+  }
+  #claude-ctx-wrap {
+    flex-shrink: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+  }
+  #btn-claude-ctx {
+    width: 24px !important;
+    height: 24px !important;
+    min-width: 24px !important;
+    padding: 0 !important;
+    flex-shrink: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
 
   /* menus open as bottom sheets: full width, above the keyboard area, big rows, dimmed page behind */
   #model-picker-dropdown,
