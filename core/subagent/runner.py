@@ -3,7 +3,6 @@ import json
 import re
 import sys
 import time
-from contextvars import ContextVar
 from typing import Optional
 from .constants import (
     DEFAULT_SUBAGENT_STEPS,
@@ -14,15 +13,6 @@ from .constants import (
 from ..agent_loop.tool_output import cap_tool_result
 from .scope import _subagent_scope
 from .window import _subagent_window
-
-_active_subagent_traces: ContextVar[Optional[list]] = ContextVar("active_subagent_traces", default=None)
-
-def get_subagent_traces() -> list:
-    traces = _active_subagent_traces.get()
-    return traces if traces is not None else []
-
-def clear_subagent_traces():
-    _active_subagent_traces.set(None)
 
 
 def resolve_subagent_tools(all_names, role_tools=None, tool_allowlist=None, parent_allowlist=None) -> set:
@@ -206,8 +196,7 @@ def subagent_result_verdict(tool_name: str, result) -> Optional[bool]:
 
 
 async def run_subagent(task: str, role: Optional[str] = None, lane_override: Optional[str] = None,
-                        tool_allowlist: Optional[list] = None, max_steps: Optional[int] = None,
-                        trace_out: Optional[dict] = None) -> str:
+                        tool_allowlist: Optional[list] = None, max_steps: Optional[int] = None) -> str:
     from ..roles import resolve_role
     from ..registry import registry
     from ..agent_tools import active_workspace
@@ -225,24 +214,8 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
     from .. import context_budget
     from routes.common import _llm_chat_stream
 
-    t_start = time.time()
-    steps_data = []
-    failure_reason = None
-
     task = (task or "").strip()
     if not task:
-        if trace_out is not None:
-            trace_out.update({
-                "id": f"sub_{int(t_start * 1000)}_{role or 'generic'}",
-                "role": role or "generic",
-                "task": "",
-                "status": "error",
-                "failure_reason": "Task is required and cannot be empty.",
-                "steps": [],
-                "files_modified": [],
-                "final_content": "error: spawn_agent requires a non-empty task",
-                "duration_s": 0.0,
-            })
         return "error: spawn_agent requires a non-empty task"
 
     role_cfg = resolve_role(role)
@@ -257,21 +230,8 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
             if want in n.lower() or n.lower() in want:
                 hint = f" Did you mean '{n}'?"
                 break
-        err_msg = (f"error: unknown role '{role}'.{hint} Available: {avail}. "
-                   "Pass a role, custom-agent slug, agent-library profile, or skill name.")
-        if trace_out is not None:
-            trace_out.update({
-                "id": f"sub_{int(t_start * 1000)}_{role or 'generic'}",
-                "role": role or "generic",
-                "task": task,
-                "status": "error",
-                "failure_reason": f"Unknown role '{role}'.{hint}",
-                "steps": [],
-                "files_modified": [],
-                "final_content": err_msg,
-                "duration_s": 0.0,
-            })
-        return err_msg
+        return (f"error: unknown role '{role}'.{hint} Available: {avail}. "
+                "Pass a role, custom-agent slug, agent-library profile, or skill name.")
     # explicit lane (role or override) wins; otherwise the "Sub-agents" job's model
     # (core/lanes.py, the executor by default). Any registered lane is allowed.
     from .. import lanes as lanes_mod
@@ -354,24 +314,11 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                 except Exception as e:
                     print(f"[subagent] {t.describe()} unavailable: {e}", file=sys.stderr)
             if client is None:
-                err_msg = ("error: no model is available for this sub-agent task "
-                           f"(role={role or 'generic'}). Tried: {', '.join(tried) or 'no lanes mapped'}. "
-                           "Load a model from the top toolbar, or map a Sub-agents model in Settings → Models.")
-                if trace_out is not None:
-                    trace_out.update({
-                        "id": subagent_id,
-                        "role": role or "generic",
-                        "task": task,
-                        "lane": "none",
-                        "max_steps": steps,
-                        "status": "error",
-                        "failure_reason": f"No model available (tried: {', '.join(tried) or 'none'}).",
-                        "steps": [],
-                        "files_modified": [],
-                        "final_content": err_msg,
-                        "duration_s": round(time.time() - t_start, 2),
-                    })
-                return err_msg
+                # Name what was tried: the bare "no model is available" gave the user no
+                # way to tell a missing model file from an unstarted local server.
+                return ("error: no model is available for this sub-agent task "
+                        f"(role={role or 'generic'}). Tried: {', '.join(tried) or 'no lanes mapped'}. "
+                        "Load a model from the top toolbar, or map a Sub-agents model in Settings → Models.")
             lane = lane_used.lane
             src = lane_used.source
             model_name = f"subagent:{role or 'generic'}:{lane}"
@@ -383,13 +330,7 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
             # (several thousand tokens), so compaction thought it fit and the server
             # refused the prompt.
             sub_win = await _subagent_window(lane_used)
-            for step_idx in range(steps):
-                step_record = {
-                    "step": step_idx + 1,
-                    "thought": "",
-                    "tools": [],
-                    "duration_s": 0.0,
-                }
+            for _ in range(steps):
                 sub_budget = context_budget.budget_for(lane, sub_win)
                 if sub_budget:
                     msgs[:] = compact_messages(msgs, sub_budget, tools=tools_for_subagent)
@@ -404,7 +345,6 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                 finally:
                     req_mon = _monitor_state["active"].get(rid)
                     dt = (time.time() - req_mon["start"]) if req_mon else None
-                    step_record["duration_s"] = round(dt or 0.0, 2)
                     u = (res or {}).get("usage") or {}
                     tim = (res or {}).get("timings") or {}
                     pcached, ccached = parse_cache_tokens(u, tim)
@@ -420,16 +360,12 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                 if res is None:
                     final_content = "(sub-agent got no response from the model)"
                     status = "no_response"
-                    failure_reason = "Sub-agent received no response from the model (timed out or unreachable)."
-                    steps_data.append(step_record)
                     break
                 content = res.get("content", "")
                 tool_calls = res.get("tool_calls", [])
-                step_record["thought"] = content or ""
                 if not tool_calls:
                     final_content = content
                     status = "success"
-                    steps_data.append(step_record)
                     break
 
                 history_content = sanitize_user_facing_content(content)
@@ -466,20 +402,10 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                                 files_modified.add(target_p)
                     else:
                         result = await run_tool(name, a)
-                    is_ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
-                    step_record["tools"].append({
-                        "name": name,
-                        "args": a,
-                        "result": cap_tool_result(result, 2000),
-                        "ok": is_ok,
-                    })
                     # a child re-sends its own history every step too: keep its tool results as small as the parent's
                     msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": cap_tool_result(result)})
-                steps_data.append(step_record)
             else:
                 final_content = final_content or "(sub-agent reached its step limit without a final answer)"
-                status = "step_limit"
-                failure_reason = f"Reached maximum step limit ({steps}/{steps}) without completing the task."
 
         posted_keys = _active_scope_writes.get() or []
     finally:
@@ -514,20 +440,6 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
         posted=posted_keys,
         files=sorted(files_modified) if files_modified else None,
     )
-    if trace_out is not None:
-        trace_out.update({
-            "id": subagent_id,
-            "role": role or "generic",
-            "task": task,
-            "lane": lane or "default",
-            "max_steps": steps,
-            "status": status,
-            "failure_reason": failure_reason if status != "success" else None,
-            "steps": steps_data,
-            "files_modified": sorted(files_modified) if files_modified else [],
-            "final_content": final_content.strip(),
-            "duration_s": round(time.time() - t_start, 2),
-        })
     return f"{header}\n{final_content.strip()}"
 
 
@@ -536,18 +448,13 @@ async def tool_spawn_agent(args: dict) -> str:
     task = str(args.get("task") or "").strip()
     if not task:
         return "error: task is required"
-    trace = {}
-    res = await run_subagent(
+    return await run_subagent(
         task=task,
         role=args.get("role"),
         lane_override=args.get("lane"),
         tool_allowlist=args.get("tools"),
         max_steps=args.get("max_steps"),
-        trace_out=trace,
     )
-    if trace:
-        _active_subagent_traces.set([trace])
-    return res
 
 
 async def run_parallel_subagents(agent_specs: list, max_concurrency: int = 4) -> str:
@@ -558,61 +465,27 @@ async def run_parallel_subagents(agent_specs: list, max_concurrency: int = 4) ->
         max_concurrency = min(max_concurrency, PERSONAL_MAX_PARALLEL)   # Agent mode shares the GPU with everyone
 
     sem = asyncio.Semaphore(max(1, max_concurrency))
-    traces = [None] * len(agent_specs)
 
     async def _run_one(idx: int, spec: dict) -> str:
-        trace = {}
-        traces[idx] = trace
         if not isinstance(spec, dict):
-            trace.update({
-                "id": f"sub_{idx+1}",
-                "role": "unknown",
-                "task": "",
-                "status": "error",
-                "failure_reason": "Invalid specification format",
-                "steps": [],
-                "final_content": "error: invalid specification format",
-            })
             return f"[Sub-agent #{idx+1}]: error: invalid specification format"
         task = str(spec.get("task") or "").strip()
         if not task:
-            trace.update({
-                "id": f"sub_{idx+1}",
-                "role": spec.get("role") or "generic",
-                "task": "",
-                "status": "error",
-                "failure_reason": "Task is required",
-                "steps": [],
-                "final_content": "error: task is required",
-            })
             return f"[Sub-agent #{idx+1}]: error: task is required"
         role = spec.get("role")
         lane = spec.get("lane")
         tools = spec.get("tools")
         max_steps = spec.get("max_steps")
         async with sem:
-            try:
-                res = await run_subagent(
-                    task=task,
-                    role=role,
-                    lane_override=lane,
-                    tool_allowlist=tools,
-                    max_steps=max_steps,
-                    trace_out=trace,
-                )
-                title = f"Sub-agent #{idx+1}" + (f" (role={role})" if role else "")
-                return f"=== {title} ===\n{res}"
-            except Exception as e:
-                trace.update({
-                    "id": f"sub_{idx+1}",
-                    "role": role or "generic",
-                    "task": task,
-                    "status": "error",
-                    "failure_reason": f"{type(e).__name__}: {e}",
-                    "steps": [],
-                    "final_content": f"error: {type(e).__name__}: {e}",
-                })
-                raise
+            res = await run_subagent(
+                task=task,
+                role=role,
+                lane_override=lane,
+                tool_allowlist=tools,
+                max_steps=max_steps,
+            )
+            title = f"Sub-agent #{idx+1}" + (f" (role={role})" if role else "")
+            return f"=== {title} ===\n{res}"
 
     tasks = [_run_one(i, spec) for i, spec in enumerate(agent_specs)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -623,10 +496,6 @@ async def run_parallel_subagents(agent_specs: list, max_concurrency: int = 4) ->
             formatted.append(f"=== Sub-agent #{i+1} ===\nerror: {type(r).__name__}: {r}")
         else:
             formatted.append(str(r))
-
-    valid_traces = [t for t in traces if t]
-    if valid_traces:
-        _active_subagent_traces.set(valid_traces)
 
     header = f"[parallel sub-agents · {len(agent_specs)} spawned concurrently]"
     return f"{header}\n\n" + "\n\n".join(formatted)

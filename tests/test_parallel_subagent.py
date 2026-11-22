@@ -48,7 +48,7 @@ class ParallelSubagentExecutionTests(unittest.IsolatedAsyncioTestCase):
         """Verify that multiple subagents execute concurrently in parallel rather than serially."""
         call_times = []
 
-        async def _mock_run(task, role=None, lane_override=None, tool_allowlist=None, max_steps=None, **kwargs):
+        async def _mock_run(task, role=None, lane_override=None, tool_allowlist=None, max_steps=None):
             t_start = time.perf_counter()
             await asyncio.sleep(0.08)
             call_times.append((task, t_start, time.perf_counter()))
@@ -80,7 +80,7 @@ class ParallelSubagentExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fault_isolation(self):
         """If one subagent fails or throws, other subagents must still finish successfully."""
-        async def _mock_run(task, role=None, lane_override=None, tool_allowlist=None, max_steps=None, **kwargs):
+        async def _mock_run(task, role=None, lane_override=None, tool_allowlist=None, max_steps=None):
             if "failing" in task:
                 raise RuntimeError("Hardware connection dropped")
             return f"OK: {task}"

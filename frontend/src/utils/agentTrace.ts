@@ -15,7 +15,6 @@ export interface TraceItem {
   isThought?: boolean;
   text?: string;
   duration_s?: number;
-  subagents?: any[];
 }
 
 type Segment = { kind: 'prose'; text: string } | { kind: 'group'; items: TraceItem[] };
@@ -242,10 +241,7 @@ function parseSubagentsFromText(rawText: unknown): any[] {
 }
 
 function renderSubagentViewHtml(t: TraceItem): string {
-  let subagents = t.subagents;
-  if (!subagents || !subagents.length) {
-    subagents = parseSubagentsFromText(t.result);
-  }
+  const subagents = parseSubagentsFromText(t.result);
   if (!subagents || !subagents.length) return '';
 
   const total = subagents.length;
@@ -457,7 +453,7 @@ export function traceSegments(acts: any[]): Segment[] {
         isThought: true, text, duration_s: a.duration_s || a.secs || 1 });
     } else if (a.type === 'tool_call') {
       const it: TraceItem = { id: a.id || `tc-${idx}`, name: a.name || 'tool', args: a.args || {}, result: null,
-        failed: false, running: true, subagents: a.subagents || undefined };
+        failed: false, running: true };
       group().push(it);
       if (a.id) byId.set(a.id, it);
     } else if (a.type === 'tool_result') {
@@ -465,7 +461,6 @@ export function traceSegments(acts: any[]): Segment[] {
       if (!it) return;
       it.result = a.result;
       it.running = false;
-      if (a.subagents) it.subagents = a.subagents;
       // the server's verdict decides; only older stored steps without `ok` fall back to an "error..." result
       it.failed = a.ok === false || (a.ok === undefined && typeof a.result === 'string' && /^\s*error\b/i.test(a.result));
     }

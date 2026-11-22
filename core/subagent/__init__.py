@@ -10,8 +10,6 @@ from .constants import (
     SUBAGENT_SYSTEM_PROMPT,
 )
 from .runner import (
-    clear_subagent_traces,
-    get_subagent_traces,
     parse_subagent_envelope,
     resolve_subagent_tools,
     run_subagent,
@@ -61,8 +59,6 @@ __all__ = [
     "run_parallel_subagents",
     "tool_spawn_agent",
     "tool_spawn_parallel_agents",
-    "get_subagent_traces",
-    "clear_subagent_traces",
     "parse_subagent_envelope",
     "blackboard_clear",
     "blackboard_read",
