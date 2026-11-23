@@ -1394,18 +1394,29 @@ async def run_agent_stream(req, user, ctx):
                         last_query, final_content, final_reasoning, actions_taken)
                     val_text, was_synth = _strip_download_markers(val_text, was_synth)
 
-                    if was_synth and val_text != final_content:
+                    # A run can reach `done: completed` with NO `delta` event at all when the
+                    # model's final turn produced no streamed text (e.g. it ended right after
+                    # tool results). The user then sees an empty answer and an evaluator that
+                    # scores streamed text sees "". Emit a visible chunk on this path too,
+                    # mirroring the stop path below - regardless of whether the validator
+                    # labelled the answer "synthesized".
+                    if not (final_content or "").strip():
                         _red.reset()
-                        if not final_content.strip():
-                            yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
-                        else:
-                            yield "event: delta_reset\ndata: {}\n\n"
-                            yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
+                        out_text = (val_text or "").strip() or (
+                            "Task completed. All requested operations have been processed in the workspace.")
+                        yield f"event: delta\ndata: {json.dumps({'text': out_text})}\n\n"
+                    elif was_synth and val_text != final_content:
+                        _red.reset()
+                        yield "event: delta_reset\ndata: {}\n\n"
+                        yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
+                        out_text = val_text
+                    else:
+                        out_text = final_content
                     run_outcome = "synthesized" if was_synth else (
                         "passive_refusal" if note == PASSIVE_REFUSAL_NOTE else "answered")
                     _outcome_detail = _synth_detail(note)
                     async for _vc in answer_check_events(
-                            user, "agent", last_query, val_text if was_synth else final_content,
+                            user, "agent", last_query, out_text,
                             msgs, main_client, req.verify, _cloud_out):
                         yield _vc
                     yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
