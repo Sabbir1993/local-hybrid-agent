@@ -27,6 +27,10 @@ Usage:
   python tests/eval_agent.py --live --live-user eval --live-password '...'  # sign in first
                                                              # (eval account: dedicated project on a
                                                              #  throwaway workspace, never MFA)
+  python tests/eval_agent.py --live --live-user eval --live-password '...' \
+      --live-workspace D:/eval_ws --live-allow-python --live-tasks file_write_read,compute_arithmetic
+                                                             # live task names are in tests/eval_tasks.py,
+                                                             # NOT the --mock names above.
 
 Results are printed as a scorecard and saved to tests/eval_results.json.
 """

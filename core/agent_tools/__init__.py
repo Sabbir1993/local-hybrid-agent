@@ -141,6 +141,24 @@ TOOL_IMPLS["blackboard_post"] = _tool_blackboard_post
 TOOL_IMPLS["blackboard_read"] = _tool_blackboard_read
 
 
+# Isolated code runner (docs/RUNNER.md). The implementation is registered for every
+# request, but the SCHEMA is only offered to a lane when the runner is paired and
+# healthy (routes/agent/stream.py, routes/chat/run.py). A model can emit any tool
+# name, so this also fails closed: no user, or no runner, means no code executes.
+# Nothing here changes host execution yet - that is the next P1 step.
+async def _tool_run_sandbox_python(args: dict) -> str:
+    from ..sandbox import available, tool_run_sandbox_python
+    uid = get_current_user_id()
+    if uid is None:
+        return "error: the code runner requires an authenticated user"
+    if not await available():
+        return "error: the isolated code runner is unavailable; no code was run"
+    return await tool_run_sandbox_python(args, uid)
+
+
+TOOL_IMPLS["run_sandbox_python"] = _tool_run_sandbox_python
+
+
 # Document tools (doc_inspect / doc_edit / doc_create): same late wiring, since
 # core.doc_tools imports the workspace helpers from this module.
 from ..doc_tools import AGENT_IMPLS as _DOC_IMPLS, DOC_SCHEMAS as _DOC_SCHEMAS  # noqa: E402

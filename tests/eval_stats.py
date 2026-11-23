@@ -74,9 +74,16 @@ def summarize_task(task_name: str, runs: list, category: str = "misc", soft: boo
         "lanes_seen": lanes_seen,
         "duration_s": {"min": min(durations), "max": max(durations),
                        "mean": round(sum(durations) / len(durations), 1)} if durations else None,
+        # Per-run codes and counts only - never command text or answer text: a denied
+        # approval can carry a workspace path, and an answer can carry user data.
+        # done_state + final_len distinguish "model said nothing" from "run died early".
         "runs": [{"ok": r.get("ok"), "duration_s": r.get("duration_s"),
                   "tools": r.get("tools"), "lanes": r.get("lanes"),
-                  "error": r.get("error")} for r in runs],
+                  "error": r.get("error"),
+                  "done_state": r.get("done_state"),
+                  "final_len": r.get("final_len"),
+                  "approvals_denied": len(r.get("approvals_denied") or []),
+                  "events_seen": r.get("events_seen") or []} for r in runs],
     }
 
 

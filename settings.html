@@ -815,6 +815,22 @@
           <h2>⚙️ Model Config · Restart to Apply</h2>
           <p class="dim">Choose the engine (llama.cpp or vLLM) and its launch parameters; saved per model</p>
         </div>
+        <!-- Machine-level runtime: install-wide llama.cpp backend / binary / GPU list, saved via /control/runtime.
+             Unlike the per-model fields below, these are validated by the same select_runtime() used at startup. -->
+        <details id="rt-box" style="margin:0 0 10px;">
+          <summary style="cursor:pointer; font-size:12px; font-weight:600;">Runtime &amp; GPU backend (machine-level, restart to apply)</summary>
+          <div class="cfg-grid" style="margin-top:8px;">
+            <div class="cfg-item"><label for="rt-name">Runtime preset</label><select id="rt-name"></select></div>
+            <div class="cfg-item"><label for="rt-backend">llama.cpp backend</label><select id="rt-backend"><option value="vulkan">Vulkan</option><option value="cuda">CUDA</option><option value="sycl">SYCL</option></select></div>
+            <div class="cfg-item" style="grid-column:1/-1;"><label for="rt-bin">llama.cpp bin directory</label><input id="rt-bin" type="text" spellcheck="false" placeholder="E:\AI\vulkan-arc\llama-vulkan"></div>
+            <div class="cfg-item"><label for="rt-gpus">GPU devices (indices or auto)</label><input id="rt-gpus" type="text" spellcheck="false" placeholder="auto"></div>
+            <div class="cfg-item"><label for="rt-small-gpu">Helper-model GPU</label><input id="rt-small-gpu" type="number" min="0"></div>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap;">
+            <button type="button" id="rt-save" class="btn">Save runtime</button>
+            <span id="rt-note" class="dim" style="font-size:11px;"></span>
+          </div>
+        </details>
         <!-- Engine (3/12) and model picker (9/12) on one row; wraps to two full-width lines on narrow screens.
              Engine: llama.cpp (llama-server) or vLLM. Chosen before loading; saved per model. -->
         <div class="engine-model-row">
@@ -1425,6 +1441,7 @@
 <script src="/static/js/sampling.js?v=1.3"></script>
 <script src="/static/js/gpu-status.js?v=3.5"></script>
 <script src="/static/js/config.js?v=3.6"></script>
+<script src="/static/js/runtime-config.js?v=1.0"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
 <script src="/static/js/agent-memory-ui.js?v=1.5"></script>
 <script src="/static/js/cap-help.js?v=1.3"></script>

@@ -80,14 +80,18 @@ class SandboxToolTests(Base):
         self.assertEqual(names(tl), ["write_file"])
         self.assertNotIn("sandbox", labels(s))                                  # its manual went with the tool
 
-    def test_dispatch_refuses_the_sandbox_when_it_is_off(self):
-        """b3.py: the reason the tool must not be offered by memory."""
+    def test_dispatch_fails_closed_when_the_runner_is_unavailable(self):
+        """The impl is registered now, but an unpaired/unhealthy runner must refuse -
+        never read as 'unknown' and never silently run code on the host."""
         import asyncio
+        from unittest.mock import AsyncMock, patch
         from core.agent_loop import run_tool
         from core import request_context as rc
         rc.set_current_user(1)
-        out = asyncio.run(run_tool("run_sandbox_python", {"code": "print(1)"}))
-        self.assertIn("unknown", str(out).lower())
+        with patch("core.sandbox.admin.ready", new=AsyncMock(return_value=False)):
+            out = asyncio.run(run_tool("run_sandbox_python", {"code": "print(1)"}))
+        self.assertTrue(str(out).startswith("error:"))
+        self.assertIn("unavailable", str(out).lower())
 
 
 class ResetTests(Base):

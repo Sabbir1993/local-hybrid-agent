@@ -1,6 +1,8 @@
-# CI: unit tests, JS tests, lint, coverage, eval gates, dependency audit.
+# CI: unit tests, JS tests, lint, encoding, frontend build, coverage, eval gates, dependency audit.
 #
 # Stage order is feedback order: the cheapest signal that can fail the build runs first.
+# frontend/dist is generated here (it is git-ignored), so the React app cannot silently
+# rot in the repo while the Python tests stay green.
 # The eval mock gate (loop behaviour) runs after unit tests because a red unit suite
 # usually explains a red eval. The pip-audit gate runs last: it needs the network for
 # the vulnerability database and is the slowest step.
@@ -41,6 +43,9 @@ jobs:
       - name: Lint (undefined names, syntax, dead code - pyproject.toml)
         run: python -m ruff check core routes tests server_manager.py autotune.py
 
+      - name: Encoding guard (mojibake in tracked text)
+        run: python scripts/check_encoding.py
+
       - name: Unit tests
         run: python -m unittest discover tests
 
@@ -51,6 +56,21 @@ jobs:
         run: |
           npm ci --ignore-scripts
           npm run lint -- --no-color
+
+      - name: Frontend dependencies
+        working-directory: frontend
+        run: npm ci --ignore-scripts
+
+      - name: Frontend lint (oxlint)
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Frontend build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Frontend build smoke
+        run: node -e "const fs=require('fs');const p='frontend/dist/index.html';if(!fs.existsSync(p)){console.error('missing '+p);process.exit(1)}const h=fs.readFileSync(p,'utf8');if(!h.includes('/assets/')||!h.includes('Local Agent')){console.error('unexpected React build output');process.exit(1)}console.log('React build present')"
 
       - name: Coverage gate (floor in pyproject.toml, ratchet only upward)
         run: |

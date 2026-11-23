@@ -141,6 +141,29 @@ The chat offers `run_sandbox_python` only when the runner is paired, switched on
 (checked every 30 s). Anything else - unreachable, certificate changed, self-test failed - and the tool simply is not there.
 The app never falls back to running code on its own host.
 
+## Agent mode: execution contract
+
+**Today.** Agent mode runs `run_python` and `run_shell` on the user's PC through the companion, with per-call approval.
+`run_sandbox_python` is defined in `core/sandbox/tool.py` but is offered only in chat (`routes/chat/run.py`); the agent loop
+does not see it. The runner itself is already paired and enabled in `config/app.json`.
+
+**The contract for wiring it into the agent loop (P1):**
+
+- **Mode switch.** `sandbox.mode`: `off` (today's behaviour), `python` (default: agent-mode `run_python` goes to the runner),
+  `all` (mutating shell also goes through the Windows AppContainer spike once that path is proven on the target machine).
+- **Availability is a gate, not a preference.** If the runner is unpaired, unhealthy, has a changed certificate, or failed its
+  self-test, the tool is not offered and the app does **not** silently run the code on the host. The host path exists only as an
+  explicit admin opt-in and is labelled as such in the warnings.
+- **Inputs.** Only files already approved for this run, sent read-only into `/in`. No workspace write-through from the runner.
+  PAN / card-number checks run before any code or input leaves the app.
+- **Outputs.** Files written in the job's current folder come back as named artifacts. The agent loop maps them into the active
+  workspace through the companion's normal approval path; nothing is written to the server's disk.
+- **Permissions are unchanged.** `permission_rules`, `pre_tool` hooks, injection-taint checks and Personal-Agent refusals all run
+  before dispatch. A sub-agent still cannot call any code tool (`core/subagent/constants.py::DENIED_TOOLS`).
+- **No network, no pip.** Standard library plus the runner's locked library set. Timeout is capped by `agent.exec_timeout_s`;
+  three consecutive failures stop the loop, as in chat.
+- **Telemetry.** Fixed `sandbox:*` codes in `route_events.tool_err` - never code text, file names or paths.
+
 ## Operating
 
 - Logs: `/var/log/a770-runner.log` on the runner (no code, no file names, no request bodies).

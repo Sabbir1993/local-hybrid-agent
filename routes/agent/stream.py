@@ -782,6 +782,17 @@ async def run_agent_stream(req, user, ctx):
                 model_info = get_model_info(lane_name)
                 yield f"event: lane\ndata: {json.dumps(model_info)}\n\n"
 
+                # The isolated runner (docs/RUNNER.md): its implementation is always
+                # registered, but the schema is offered only if the runner is paired,
+                # enabled and answering. Plan mode never offers it (read-only).
+                sandbox_tools = []
+                try:
+                    from core import sandbox as _agent_sandbox
+                    if await _agent_sandbox.available():
+                        sandbox_tools = [_agent_sandbox.RUN_SANDBOX_SCHEMA]
+                except Exception as _e:
+                    print(f"[agent] code runner check failed: {type(_e).__name__}", file=sys.stderr)
+
                 # executor lane gets the lean core set; the main lane gets the core set
                 # plus any situational family the request names (core/tool_surface.py:
                 # the full 48-tool surface costs ~8.5k tokens of schema on every step);
@@ -798,7 +809,7 @@ async def run_agent_stream(req, user, ctx):
                 else:
                     if lane_name == "executor" and custom_agent_tools:
                         # the custom agent's own selection, not intersected away by the core set
-                        tools_for_lane = all_tools()
+                        tools_for_lane = all_tools() + sandbox_tools
                     elif lane_name == "executor":
                         # core tools plus shell, skills and plan tracking so the
                         # executor can install packages, run commands, and tick plan items
@@ -814,12 +825,12 @@ async def run_agent_stream(req, user, ctx):
                               "find_symbol", "find_references", "file_outline", "run_tests",
                               "git_inspect", "git_commit", "git_branch",
                               # shown only when the request names an Office file (tool_surface 'docs' family)
-                              "doc_create", "doc_inspect", "doc_edit") + EXECUTOR_TEST_TOOLS
-                             or t.get("function", {}).get("name", "").startswith("mcp__")],
+                              "doc_create", "doc_inspect", "doc_edit", "run_sandbox_python") + EXECUTOR_TEST_TOOLS
+                             or t.get("function", {}).get("name", "").startswith("mcp__")] + sandbox_tools,
                             surface_q, surface_cfg)
                     else:
                         tools_for_lane = tool_surface.filter_tools(
-                            all_tools(), surface_q, surface_cfg)
+                            all_tools() + sandbox_tools, surface_q, surface_cfg)
                 if custom_agent_tools:
                     tools_for_lane = [t for t in tools_for_lane if t.get("function", {}).get("name") in custom_agent_tools]
                 if hidden_tools:
@@ -1186,7 +1197,7 @@ async def run_agent_stream(req, user, ctx):
                     esc_tools = ([t for t in all_tools()
                                   if t.get("function", {}).get("name") in PLAN_MODE_TOOLS]
                                  if req.plan else tool_surface.filter_tools(
-                                     all_tools(), surface_q, surface_cfg))
+                                     all_tools() + sandbox_tools, surface_q, surface_cfg))
                     if custom_agent_tools:
                         esc_tools = [t for t in esc_tools if t.get("function", {}).get("name") in custom_agent_tools]
                     esc_tools = prompt_scope.hide_unmentioned_mcp(

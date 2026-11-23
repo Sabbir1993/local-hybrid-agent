@@ -231,12 +231,11 @@ The GPU-facing logic is dynamic, not hardcoded to "2x Arc A770":
 llama.cpp build for your GPU vendor, and point the config files below at
 your paths. See [Setup on a new machine](#setup-on-a-new-machine).
 
-**What's still machine-specific and needs a one-time edit** (there's no UI
-for these yet — they live in source/config, not a settings panel):
+**What's still machine-specific** (mostly a one-time edit; the runtime row has a UI now):
 
 | What | Where | Why it's not auto |
 |---|---|---|
-| `llama_bin_dir`, `backend`, `gpu_devices` | `config/app.json` → `runtimes` + `runtime` (or env `LLAMA_RUNTIME`) | Install-level settings, not per-model; the active runtime overrides per-model device lists. No UI field writes these yet. |
+| `llama_bin_dir`, `backend`, `gpu_devices` | Settings → Model Config → *Runtime & GPU backend* (writes `config/app.json` → `runtimes` + `runtime` via the runtime endpoint) | Install-level settings, not per-model; the active runtime overrides per-model device lists. The saved value is validated by the same `select_runtime()` used at startup, and needs a model reload / restart to apply. An `LLAMA_RUNTIME` environment override still wins, and is shown in the panel. |
 | GPU display names (e.g. "A770 #1 · display") | `static/js/theme.js` → `LUID_NAMES` | Cosmetic only — labels a Windows adapter LUID with a human name in the GPU panel. Safe to leave as generic `GPU #N` on a new machine. |
 | Integrated-GPU LUIDs to hide from the GPU panel | `core/config.py` → `IGNORED_IGPU_LUIDS` | Windows-perfcounter LUIDs are per-machine; an iGPU you want hidden on one box may not exist on another. |
 | `models_dir`, `workspace_dir`, `common_dir`, small-model lane paths | `config/app.json` | Per-install file paths, meant to be edited (see setup below). |

@@ -36,7 +36,7 @@ def load_subagent_config() -> dict:
 
 # run_python: sub-agents have no SSE stream to raise the approval modal on
 # media tools: cost money / long GPU jobs - only the main agent may use them
-DENIED_TOOLS = {"run_shell", "run_tests", "git_commit", "git_branch", "run_python", "spawn_agent", "spawn_parallel_agents", "spawn_reviewed_coder", "generate_image", "generate_video"}
+DENIED_TOOLS = {"run_shell", "run_tests", "git_commit", "git_branch", "run_python", "run_sandbox_python", "spawn_agent", "spawn_parallel_agents", "spawn_reviewed_coder", "generate_image", "generate_video"}
 
 SUBAGENT_SYSTEM_PROMPT = """You are a focused sub-agent delegated a single, self-contained task \
 by a parent AI coding agent. Workspace: {workspace}

@@ -67,6 +67,15 @@ FAMILIES: dict = {
                      "illustrate", "illustration", "picture of", "image of", "logo",
                      "make me a picture", "make an image", "wallpaper", "avatar"],
     },
+    # The isolated runner is offered by chat/agent only when it is paired and healthy.
+    # Even then it is situational: only a request that actually needs custom code pays
+    # for the schema. The impl fails closed if the model calls it uninvited.
+    "sandbox": {
+        "names": ("run_sandbox_python",),
+        "keywords": ["isolated", "sandbox", "code runner", "run code", "python script",
+                     "custom chart", "plot", "histogram", "statistical", "calculation",
+                     "merge files", "clean the data"],
+    },
 }
 
 DEFAULT_CFG = {"main_lane_on_demand": True}

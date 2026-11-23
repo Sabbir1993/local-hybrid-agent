@@ -20,6 +20,11 @@ from .config_endpoints import (
     get_config,
     set_config,
 )
+from .runtime_endpoints import (
+    RuntimeSettingsRequest,
+    get_runtime,
+    set_runtime,
+)
 from .status_endpoints import (
     status,
     gpu,
@@ -64,6 +69,9 @@ __all__ = [
     "_standalone_profile",
     "get_config",
     "set_config",
+    "RuntimeSettingsRequest",
+    "get_runtime",
+    "set_runtime",
     "status",
     "gpu",
     "monitor",
