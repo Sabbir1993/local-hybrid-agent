@@ -98,6 +98,7 @@ class ModelHintIsolationTests(unittest.TestCase):
         cm.display = "GPT-4o mini"
         cm.provider_name = "openai"
         cm.endpoint.return_value = "https://api.openai.com/v1"
+        cm.ctx = 8192   # the switch response serializes it; a bare Mock recurses in jsonable_encoder
         return cm
 
     def test_cloud_switch_records_only_the_callers_hint(self):

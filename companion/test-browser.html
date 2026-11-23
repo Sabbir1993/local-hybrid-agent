@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Agent Test Browser</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 12px system-ui, sans-serif; background: #0d1117; color: #e6edf3; }
+  #bar { display: flex; align-items: center; gap: 6px; height: 42px; padding: 6px 10px; border-bottom: 1px solid #30363d; background: #161b22; }
+  button { height: 26px; min-width: 28px; padding: 0 8px; border: 1px solid #30363d; border-radius: 5px; background: #21262d; color: #e6edf3; cursor: pointer; }
+  button:hover { background: #30363d; }
+  #url { flex: 1; height: 26px; padding: 0 9px; border: 1px solid #30363d; border-radius: 5px; background: #0d1117; color: #e6edf3; font: 12px ui-monospace, monospace; }
+  #hint { margin-left: 4px; color: #8b949e; white-space: nowrap; }
+  webview { position: absolute; top: 42px; left: 0; width: 100%; height: calc(100% - 42px); background: #fff; }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <button id="back" title="Back">←</button>
+    <button id="fwd" title="Forward">→</button>
+    <button id="reload" title="Reload">⟳</button>
+    <input id="url" spellcheck="false" aria-label="Address" />
+    <button id="go" title="Go">Go</button>
+    <span id="hint">Agent test browser · local pages open freely</span>
+  </div>
+  <webview id="wv" allowpopups="false" style=""></webview>
+<script>
+  const wv = document.getElementById('wv');
+  const url = document.getElementById('url');
+  function go() { const u = url.value.trim(); if (u) wv.loadURL(u); }
+  document.getElementById('go').onclick = go;
+  url.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  document.getElementById('back').onclick = () => { if (wv.canGoBack()) wv.goBack(); };
+  document.getElementById('fwd').onclick = () => { if (wv.canGoForward()) wv.goForward(); };
+  document.getElementById('reload').onclick = () => wv.reload();
+  wv.addEventListener('did-navigate', (e) => { url.value = e.url; });
+  wv.addEventListener('did-navigate-in-page', (e) => { if (e.url) url.value = e.url; });
+  window.testBrowser.onInit((u) => { if (u) { url.value = u; wv.loadURL(u); } });
+  window.testBrowser.onNavigate((u) => { if (u) { url.value = u; wv.loadURL(u); } });
+</script>
+</body>
+</html>

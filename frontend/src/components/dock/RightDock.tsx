@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Code2, Globe, ListChecks, ListTodo, Terminal, Users } from 'lucide-react';
 import { useAppStore, type DockTab } from '../../stores/useAppStore';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { agentWsParam } from '../../utils/wsTarget';
@@ -29,6 +30,10 @@ export const RightDock: React.FC = () => {
   const [isMobileView, setIsMobileView] = useState(false);
   const [previewText, setPreviewText] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [browserUrl, setBrowserUrl] = useState('');
+  const [browserInput, setBrowserInput] = useState('');
+
+  const isLocalPreviewUrl = (u: string) => /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])([: /]|$)/i.test(u);
 
   // Resize right dock width state & drag handler
   const [dockWidth, setDockWidth] = useState<number>(() => {
@@ -101,6 +106,11 @@ export const RightDock: React.FC = () => {
       : `/agent/raw?path=${enc}`;
 
   useEffect(() => {
+    setBrowserUrl('');
+    setBrowserInput(rawUrl || '');
+  }, [filePath]);
+
+  useEffect(() => {
     if (!filePath && !previewModal?.directContent) {
       setPreviewText(null);
       return;
@@ -168,66 +178,75 @@ export const RightDock: React.FC = () => {
       <div className="dock-header">
         <div className="dock-header-tools">
           <button
-            className={`dock-tab-btn ${dockTab === 'plan' ? 'active' : ''}`}
+            className={`dock-tab-btn icon-only ${dockTab === 'plan' ? 'active' : ''}`}
             id="dock-btn-plan"
-            title="Plan & Execution"
+            aria-label="Plan"
+            title="Plan — the agent's current plan and execution steps"
             onClick={() => handleTabClick('plan')}
           >
-            📋 Plan
+            <ListChecks size={16} aria-hidden="true" />
           </button>
 
           <button
-            className={`dock-tab-btn ${dockTab === 'tasks' ? 'active' : ''}`}
+            className={`dock-tab-btn icon-only ${dockTab === 'tasks' ? 'active' : ''}`}
             id="dock-btn-tasks"
-            title="Background tasks: what is running, and stop"
+            aria-label="Tasks"
+            title="Tasks — background tasks, their status and controls to stop them"
             onClick={() => handleTabClick('tasks')}
           >
-            🗂 Tasks
-          </button>
-
-          <button
-            className={`dock-tab-btn ${dockTab === 'subagents' ? 'active' : ''}`}
-            id="dock-btn-subagents"
-            title="Sub-Agents Live View"
-            style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
-            onClick={() => handleTabClick('subagents')}
-          >
-            👥 Subagents
-            {hasRunningSubagents ? (
-              <span style={{ marginLeft: 5, width: 7, height: 7, background: '#38bdf8', borderRadius: '50%', display: 'inline-block', boxShadow: '0 0 6px #38bdf8' }} />
-            ) : subagentsCount > 0 ? (
-              <span style={{ fontSize: '10px', opacity: 0.7, marginLeft: 4 }}>({subagentsCount})</span>
-            ) : null}
+            <ListTodo size={16} aria-hidden="true" />
           </button>
 
           {showCodeAndTerminal && (
             <button
-              className={`dock-tab-btn ${dockTab === 'files' ? 'active' : ''}`}
-              id="dock-btn-files"
-              title="Code & Workspace Files (Ctrl+Shift+F)"
-              onClick={() => handleTabClick('files')}
+              className={`dock-tab-btn icon-only ${dockTab === 'subagents' ? 'active' : ''}`}
+              id="dock-btn-subagents"
+              aria-label="Subagents"
+              title="Subagents — live view of the child agents working on this task"
+              onClick={() => handleTabClick('subagents')}
             >
-              &lt;/&gt; Code
+              <Users size={16} aria-hidden="true" />
+              {hasRunningSubagents ? (
+                <span className="dock-tab-dot" aria-hidden="true" />
+              ) : subagentsCount > 0 ? (
+                <span className="dock-tab-count">{subagentsCount}</span>
+              ) : null}
             </button>
           )}
 
-          <button
-            className={`dock-tab-btn ${dockTab === 'preview' ? 'active' : ''}`}
-            id="dock-btn-preview"
-            title="Web Preview (HTML / Artifacts)"
-            onClick={() => handleTabClick('preview')}
-          >
-            🌐 Preview
-          </button>
+          {showCodeAndTerminal && (
+            <button
+              className={`dock-tab-btn icon-only ${dockTab === 'files' ? 'active' : ''}`}
+              id="dock-btn-files"
+              aria-label="Code"
+              title="Code — workspace files and the code inspector"
+              onClick={() => handleTabClick('files')}
+            >
+              <Code2 size={16} aria-hidden="true" />
+            </button>
+          )}
 
           {showCodeAndTerminal && (
             <button
-              className={`dock-tab-btn ${dockTab === 'terminal' ? 'active' : ''}`}
+              className={`dock-tab-btn icon-only ${dockTab === 'preview' ? 'active' : ''}`}
+              id="dock-btn-preview"
+              aria-label="Preview"
+              title="Preview — rendered web pages and artifacts"
+              onClick={() => handleTabClick('preview')}
+            >
+              <Globe size={16} aria-hidden="true" />
+            </button>
+          )}
+
+          {showCodeAndTerminal && (
+            <button
+              className={`dock-tab-btn icon-only ${dockTab === 'terminal' ? 'active' : ''}`}
               id="dock-btn-terminal"
-              title="Companion Shell Terminal"
+              aria-label="Terminal"
+              title="Terminal — the companion shell on your device"
               onClick={() => handleTabClick('terminal')}
             >
-              &gt;_ Terminal
+              <Terminal size={16} aria-hidden="true" />
             </button>
           )}
         </div>
@@ -276,7 +295,38 @@ export const RightDock: React.FC = () => {
 
       {/* Dock View: Preview (Interactive side tab matching claude-dock.js) */}
       <div className={`dock-view-body ${dockTab === 'preview' ? 'active' : ''}`} id="dock-view-preview" style={{ display: dockTab === 'preview' ? 'flex' : 'none', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-        {filePath || previewModal?.directContent ? (
+        <div className="pv-browser-bar">
+          <button type="button" className="pv-nav-btn" title="Back" onClick={() => {
+            const f = document.getElementById('prev-dock-iframe') as HTMLIFrameElement | null;
+            try { f?.contentWindow?.history.back(); } catch (_) {}
+          }}>←</button>
+          <button type="button" className="pv-nav-btn" title="Forward" onClick={() => {
+            const f = document.getElementById('prev-dock-iframe') as HTMLIFrameElement | null;
+            try { f?.contentWindow?.history.forward(); } catch (_) {}
+          }}>→</button>
+          <button type="button" className="pv-nav-btn" title="Reload" onClick={() => setReloadKey((k) => k + 1)}>⟳</button>
+          <input
+            className="pv-address"
+            aria-label="Address"
+            spellCheck={false}
+            placeholder="Enter a URL or open a file preview"
+            value={browserInput}
+            onChange={(e) => setBrowserInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter') return;
+              let u = browserInput.trim();
+              if (!u) return;
+              if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) u = 'http://' + u;
+              if (/^https?:\/\//i.test(u)) {
+                setBrowserUrl(u);
+                setPreviewMode('preview');
+              }
+            }}
+          />
+          <a className="pv-nav-btn" title="Open in new tab" target="_blank" rel="noopener noreferrer"
+             href={browserUrl || rawUrl || 'about:blank'}>↗</a>
+        </div>
+        {filePath || previewModal?.directContent || browserUrl ? (
           <>
             <div className="preview-tab-controls">
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
@@ -346,7 +396,16 @@ export const RightDock: React.FC = () => {
             </div>
 
             <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              {isImage ? (
+              {browserUrl && !isLocalPreviewUrl(browserUrl) ? (
+                React.createElement('webview' as any, {
+                  key: `webview-${browserUrl}`,
+                  src: browserUrl,
+                  allowpopups: 'false',
+                  nodeintegration: 'false',
+                  style: { width: '100%', height: '100%', border: 0, background: '#ffffff' },
+                  title: 'In-dock browser',
+                })
+              ) : isImage ? (
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0a0a0c', padding: '16px', overflow: 'auto' }}>
                   <img
                     src={rawUrl}
@@ -367,7 +426,7 @@ export const RightDock: React.FC = () => {
                       key={reloadKey}
                       className="preview-live-iframe"
                       sandbox="allow-scripts allow-forms allow-popups allow-modals"
-                      src={previewModal.directContent ? undefined : rawUrl}
+                      src={previewModal.directContent ? undefined : (browserUrl || rawUrl)}
                       srcDoc={previewModal.directContent || undefined}
                       style={{
                         width: '100%',
@@ -397,12 +456,14 @@ export const RightDock: React.FC = () => {
             </div>
           </>
         ) : (
-          <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--dim)', fontSize: '12.5px' }}>
-            <div style={{ fontSize: '24px', marginBottom: '8px' }}>🌐</div>
-            <b>Web Preview</b>
-            <p style={{ marginTop: '6px', fontSize: '11.5px' }}>
-              Click 👁️ Preview on any file, image, or generated HTML snippet to view it here.
-            </p>
+          <div className="pv-empty">
+            <div className="pv-empty-mark" aria-hidden="true">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.6 2.7 3.9 5.7 3.9 9S14.6 18.3 12 21c-2.6-2.7-3.9-5.7-3.9-9S9.4 5.7 12 3Z" />
+              </svg>
+            </div>
+            <h2>Web Preview</h2>
+            <p>Enter a URL above, or preview a generated file to see it here.</p>
           </div>
         )}
       </div>

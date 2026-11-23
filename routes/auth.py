@@ -37,6 +37,14 @@ from core.small_model import APP_CONFIG
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _row_ident(row) -> str:
+    """Account identity from a users row. The username column was dropped in the
+    email migration; tolerate legacy rows without ever assuming it exists."""
+    keys = row.keys()
+    return ((row["email"] if "email" in keys else None)
+            or (row["username"] if "username" in keys else None) or "")
+
+
 class LoginBody(BaseModel):
     username: Optional[str] = None
     email: Optional[str] = None
@@ -537,15 +545,16 @@ async def mfa_verify(body: MfaVerifyBody, request: Request, response: Response):
     if not row or not row["is_active"]:
         _consume_mfa_ticket(body.ticket)
         raise HTTPException(status_code=401, detail="invalid or expired ticket - sign in again")
+    ident = _row_ident(row)
     if not _check_second_factor(user_id, body.code or ""):
         _burn_ticket_fail(body.ticket)
-        audit_log(SimpleNamespace(id=user_id, username=row["username"]), action="login.mfa_failed",
-                   resource=row["username"], result="deny", ip=ip)
+        audit_log(SimpleNamespace(id=user_id, username=ident), action="login.mfa_failed",
+                   resource=ident, result="deny", ip=ip)
         raise HTTPException(status_code=401, detail="invalid code")
     _consume_mfa_ticket(body.ticket)
     from core.auth_provider import UserRecord
-    user = UserRecord(id=row["id"], username=row["username"],
-                      display_name=row["display_name"] or row["username"],
+    user = UserRecord(id=row["id"], username=ident,
+                      display_name=row["display_name"] or ident,
                       is_active=True, is_super_admin=bool(row["is_super_admin"]),
                       must_change_password=bool(row["must_change_password"]))
     raw_session = create_session(user, ip=ip, user_agent=request.headers.get("user-agent"), mfa_verified=True)
@@ -577,9 +586,10 @@ async def mfa_ticket_enroll(body: MfaTicketBody, request: Request):
     auth_db.set_totp_secret(user_id, secret)
     codes = totp.generate_backup_codes(8)
     auth_db.store_backup_codes(user_id, codes)
-    audit_log(SimpleNamespace(id=user_id, username=row["username"]), action="mfa.enroll",
-               resource=row["username"], result="allow", ip=ip)
-    return {"secret": secret, "otpauth_uri": totp.otpauth_uri(secret, row["username"]),
+    ident = _row_ident(row)
+    audit_log(SimpleNamespace(id=user_id, username=ident), action="mfa.enroll",
+               resource=ident, result="allow", ip=ip)
+    return {"secret": secret, "otpauth_uri": totp.otpauth_uri(secret, ident),
             "backup_codes": codes}
 
 
@@ -599,17 +609,18 @@ async def mfa_ticket_confirm(body: MfaVerifyBody, request: Request, response: Re
     if auth_db.totp_enabled(user_id) or not st["secret"]:
         raise HTTPException(status_code=400, detail="nothing to confirm - enroll first")
     counter = totp.verify(st["secret"], body.code or "")
+    ident = _row_ident(row)
     if counter is None:
         _burn_ticket_fail(body.ticket)
-        audit_log(SimpleNamespace(id=user_id, username=row["username"]), action="mfa.confirm",
-                   resource=row["username"], result="deny", ip=ip)
+        audit_log(SimpleNamespace(id=user_id, username=ident), action="mfa.confirm",
+                   resource=ident, result="deny", ip=ip)
         raise HTTPException(status_code=401, detail="invalid code")
     auth_db.enable_totp(user_id)
     auth_db.record_totp_counter(user_id, counter)
     _consume_mfa_ticket(body.ticket)
     from core.auth_provider import UserRecord
-    user = UserRecord(id=row["id"], username=row["username"],
-                      display_name=row["display_name"] or row["username"],
+    user = UserRecord(id=row["id"], username=ident,
+                      display_name=row["display_name"] or ident,
                       is_active=True, is_super_admin=bool(row["is_super_admin"]),
                       must_change_password=bool(row["must_change_password"]))
     raw_session = create_session(user, ip=ip, user_agent=request.headers.get("user-agent"), mfa_verified=True)

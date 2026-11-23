@@ -374,6 +374,11 @@ def _migrate_drop_username_column(conn) -> None:
 def init_tables(conn) -> None:
     conn.executescript(SCHEMA_SCRIPT)
     conn.commit()
+    # Per-user UI preferences (appearance). Kept in auth.db so they follow the
+    # account and are erased with it, like agent memory.
+    conn.execute("CREATE TABLE IF NOT EXISTS user_preferences ("
+                 "user_id INTEGER PRIMARY KEY, settings TEXT NOT NULL DEFAULT '{}', updated_at REAL)")
+    conn.commit()
     _migrate_drop_username_column(conn)
     _cols = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
     for col, ddl in (("totp_secret", "TEXT"),

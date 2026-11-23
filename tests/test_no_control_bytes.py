@@ -2,7 +2,9 @@ import os
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SKIP_DIRS = {"node_modules", ".git", "vendor", "dist", "__pycache__", ".venv", "venv", "build"}
+# "worktrees" are throwaway checkouts (git-ignored); scanning them re-reports
+# stale copies of files that were already fixed in the main tree.
+SKIP_DIRS = {"node_modules", ".git", "vendor", "dist", "__pycache__", ".venv", "venv", "build", "worktrees"}
 SUFFIXES = (".py", ".js", ".ts", ".tsx", ".md", ".json", ".html", ".css")
 MAX_BYTES = 2 * 1024 * 1024
 ALLOWED = {9, 10, 13}  # tab, LF, CR

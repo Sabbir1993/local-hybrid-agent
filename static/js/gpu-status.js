@@ -49,6 +49,7 @@ function applyStatusPayload(s) {
   _lastLocalPid = hasPid;
 
   const sel = $('profile');
+  const cloudSel = $('cloud-model-sel');
   const selName = (sel && sel.value) ? sel.value.split('\\').pop().split('/').pop() : 'Model';
   const m = s.model ? s.model.split('\\').pop().split('/').pop() : selName;
   // The welcome card only exists on an empty chat. Its absence must not stop the rest of this refresh: with a

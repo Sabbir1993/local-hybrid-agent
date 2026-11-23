@@ -59,8 +59,10 @@ here).
 ## What this actually is today
 
 What started as a CLI autotune/proxy pair has grown into a small local
-control-center app: a FastAPI backend (`server_manager.py` + `routes/`)
-serving a single-page web UI (`ui.html` + `static/js/`) with:
+control-center app: a FastAPI backend (`server_manager.py` + `routes/`) that
+exposes the API, and a **separate** React frontend app in `frontend/` that is
+served on its own port. The backend does not serve the UI: opening its port in a
+browser returns a 404 JSON error by design. It provides:
 
 - **Chat mode** — direct conversation with the loaded model.
 - **Agent mode** (Plan / Build) — an autonomous coding loop with file
@@ -573,9 +575,11 @@ curl -X POST http://localhost:8000/control/switch -d '{"profile":"E:/AI/Models/y
   delete to reset a model to defaults. `config/providers/user_<id>.json` —
   each user's cloud providers, own cloud models, job choices and answer-check
   settings (git-ignored; API keys are in the OS keychain, not in the file).
-- `ui.html` + `static/js/*` — the single-page web control center (chat,
-  agent mode, settings, monitor, usage report). `static/js/theme.js` holds
-  the (optional, cosmetic) machine-specific GPU display-name map.
+- `frontend/src/*` — the separate React frontend app (chat, agent mode,
+  settings, monitor, usage report), run with its own dev server / build.
+  `static/js/*` — legacy assets used by the backend-served settings page;
+  `static/js/theme.js` holds the (optional, cosmetic) machine-specific GPU
+  display-name map.
 - `scripts/download_models.py` — fetches the models and llama.cpp / stable-diffusion.cpp builds.
 - `docs/INSTALL_LINUX.html` — step-by-step Linux server install, with the model list and download URLs.
 

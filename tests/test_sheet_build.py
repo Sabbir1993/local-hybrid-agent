@@ -279,7 +279,8 @@ class Intent(unittest.TestCase):
         example = re.search(r"```\n(.*?)```", ps.XLSX_MANUAL, re.S).group(1)
         example = re.sub(r"\s{2,}\(corporate.*?\)", "", example)
         data = make(example)
-        self.assertEqual(openpyxl.load_workbook(io.BytesIO(data)).sheetnames, ["Assumptions", "Sales"])
+        self.assertEqual(openpyxl.load_workbook(io.BytesIO(data)).sheetnames,
+                         ["Executive Summary", "Benchmarks & Comparison", "Data & Assumptions"])
 
     def test_the_route_offers_the_tools_and_manual(self):
         from pathlib import Path

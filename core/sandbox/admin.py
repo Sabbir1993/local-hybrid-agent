@@ -1,5 +1,6 @@
 """Setting the runner up from the admin page: pair with a one-time code, self-test, switch on, forget. And the live check the chat
 makes before it offers the code tool (fail closed: anything unexpected means "not available")."""
+import os
 import time
 from typing import Optional
 
@@ -8,6 +9,15 @@ from .client import RunnerError
 
 _HEALTH_TTL_S = 30
 _health_cache: dict = {"at": 0.0, "url": "", "ok": False}
+
+
+def _local_opt_in() -> bool:
+    """local/wsl2 backends execute model-authored code on this host with no OS isolation.
+
+    They stay available for development only behind an explicit opt-in; a shipped
+    config must never offer them as a code runner.
+    """
+    return os.environ.get("A770_ALLOW_LOCAL_RUNNER") == "1"
 
 
 def _short(fp: str) -> str:
@@ -50,7 +60,8 @@ async def selftest() -> dict:
         return {
             "ok": True,
             "checks": [
-                {"name": f"{backend} runner isolation", "ok": True, "detail": "Container/Process isolation active"},
+                {"name": f"{backend} runner (NOT isolated)", "ok": True,
+                 "detail": "Host process: no OS, network or filesystem isolation - development only"},
                 {"name": "Python execution", "ok": True, "detail": res.get("stdout", "").strip()},
             ],
             "verified_at": now,
@@ -115,7 +126,8 @@ async def status() -> dict:
             "verified_at": float(c.get("verified_at") or 0),
             "reachable": avail,
             "sandbox": "wsl2",
-            "ready": bool(avail and config.enabled()),
+            "isolated": False,
+            "ready": bool(avail and config.enabled() and _local_opt_in()),
             "backend": "wsl2",
         }
     if backend in ("local", "job", "localjob"):
@@ -128,7 +140,8 @@ async def status() -> dict:
             "verified_at": float(c.get("verified_at") or 0),
             "reachable": True,
             "sandbox": "process",
-            "ready": config.enabled(),
+            "isolated": False,
+            "ready": bool(config.enabled() and _local_opt_in()),
             "backend": "local",
         }
     live = await health()
@@ -145,9 +158,9 @@ async def ready() -> bool:
     from . import runners
     backend = (config.cfg().get("runner_backend") or __import__("os").environ.get("SANDBOX_BACKEND") or "").lower().strip()
     if backend == "wsl2":
-        return runners.WSL2Runner.is_available()
+        return bool(config.enabled() and _local_opt_in() and runners.WSL2Runner.is_available())
     if backend in ("local", "job", "localjob"):
-        return True
+        return bool(config.enabled() and _local_opt_in())
 
     if not (config.enabled() and config.configured()):
         return False

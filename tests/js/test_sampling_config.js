@@ -12,7 +12,7 @@ const j = o => JSON.parse(JSON.stringify(o));
 
 const d = j(ctx.sanitize({}));
 assert.deepStrictEqual([d.rlast, d.freq, d.seed], [64, 0, -1]);
-assert.deepStrictEqual([d.drym, d.dryb, d.dryl, d.dryn], [0, 1.75, 2, 4096]);
+assert.deepStrictEqual([d.drym, d.dryb, d.dryl, d.dryn], [0.6, 1.75, 4, 2048]);
 assert.deepStrictEqual([d.dynr, d.dyne], [0, 1]);
 
 const c = j(ctx.sanitize({ rlast: 99999, freq: -9, seed: -5, drym: 99, dryb: 0, dryl: 999, dryn: -50, dynr: 9, dyne: 0 }));

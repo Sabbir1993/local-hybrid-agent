@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
+import { ArrowUpRight, Circle, X } from 'lucide-react';
 import { useAppStore } from '../../stores/useAppStore';
 import { apiFetch } from '../../services/api';
 import { cleanModelName } from '../../utils/models';
+import '../../styles/monitor.css';
 
 export const MonitorDrawer: React.FC = () => {
   const { activeModal, setActiveModal, openSettingsModal } = useAppStore();
@@ -13,7 +15,6 @@ export const MonitorDrawer: React.FC = () => {
 
   useEffect(() => {
     if (!isOpen) return;
-
     let mounted = true;
     const fetchMonitor = async () => {
       try {
@@ -21,9 +22,7 @@ export const MonitorDrawer: React.FC = () => {
           apiFetch('/control/monitor').then((r) => r.json()),
           apiFetch('/agent/runs').then((r) => r.json()),
         ]);
-
         if (!mounted) return;
-
         if (monRes.status === 'fulfilled' && monRes.value) {
           setActiveReqs(monRes.value.active || []);
           setRecentReqs(monRes.value.recent || []);
@@ -33,146 +32,98 @@ export const MonitorDrawer: React.FC = () => {
         }
       } catch (_) {}
     };
-
     fetchMonitor();
     const timer = setInterval(fetchMonitor, 2000);
-    return () => {
-      mounted = false;
-      clearInterval(timer);
-    };
+    return () => { mounted = false; clearInterval(timer); };
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  return (
-    <div
-      id="monitor-drawer"
-      className="open"
-      style={{
-        position: 'fixed',
-        top: 0,
-        right: 0,
-        bottom: 0,
-        width: '440px',
-        maxWidth: '94vw',
-        background: 'var(--panel)',
-        borderLeft: '1px solid var(--border)',
-        zIndex: 9999,
-        display: 'flex',
-        flexDirection: 'column',
-        boxShadow: '-8px 0 28px rgba(0,0,0,0.5)',
-      }}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <div
-        className="drawer-head flex items-center justify-between px-4 border-b border-border bg-panel2 select-none"
-        style={{ height: '48px', minHeight: '48px', maxHeight: '48px' }}
-      >
-        <span className="font-bold text-xs tracking-wider flex items-center gap-1.5 whitespace-nowrap">
-          📡 Real-time Monitor
-        </span>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <button
-            className="btn ghost text-[11.5px] px-2.5 py-1 rounded border border-border-subtle hover:bg-panel flex items-center gap-1.5 whitespace-nowrap"
-            onClick={() => openSettingsModal('sec-live-monitor')}
-            title="Open full dashboard in Settings"
-          >
-            <span>📊 Full Dashboard ↗</span>
-          </button>
-          <button
-            className="btn ghost text-xs px-2 py-1 rounded hover:bg-panel text-text-muted hover:text-text"
-            onClick={() => setActiveModal('none')}
-            title="Close (Esc)"
-          >
-            ✕
-          </button>
-        </div>
+  const standby = (title: string, note: string) => (
+    <div className="mo-standby">
+      <span className="mo-standby-node" aria-hidden="true"><Circle size={7} strokeWidth={2} /></span>
+      <div>
+        <b>{title}</b>
+        <p>{note}</p>
       </div>
+    </div>
+  );
 
-      <div className="drawer-body flex-1 overflow-y-auto p-4 flex flex-col gap-4 text-xs">
-        {/* Active generations */}
-        <div className="mon-section">
-          <h4 className="font-semibold text-text uppercase tracking-wider text-[10px] text-text-muted mb-2">
-            Active generations
-          </h4>
-          <div id="mon-active-list">
-            {activeReqs.length === 0 ? (
-              <div className="mon-empty p-3 rounded bg-panel2 border border-border-subtle text-text-muted text-center">
-                No active requests
-              </div>
-            ) : (
-              activeReqs.map((r, i) => (
-                <div key={i} className="p-2 mb-1.5 rounded bg-panel2 border border-border-subtle">
-                  <div className="font-semibold text-accent">{r.endpoint || '/chat'}</div>
-                  <div className="text-[11px] text-text-muted mt-0.5">
-                    {r.elapsed_s}s elapsed · {r.gen_tokens || 0} tokens
+  return (
+    <div id="monitor-drawer" className="open" onClick={(e) => e.stopPropagation()}>
+      <header className="mo-head">
+        <div className="mo-head-row">
+          <span className="mo-head-label">Real-time monitor</span>
+          <span className="mo-head-count">{activeReqs.length + agentRuns.filter((r) => r.running).length}<span> active</span></span>
+        </div>
+        <div className="mo-actions">
+          <button type="button" onClick={() => openSettingsModal('sec-live-monitor')} title="Open full dashboard in Settings">
+            Full dashboard <ArrowUpRight size={12} />
+          </button>
+          <button type="button" onClick={() => setActiveModal('none')} title="Close (Esc)" aria-label="Close"><X size={14} /></button>
+        </div>
+      </header>
+
+      <div className="mo-body">
+        <section className="mo-section">
+          <h4>Active generations</h4>
+          {activeReqs.length === 0 ? standby('Idle', 'No requests are being generated right now.') : (
+            <ul className="mo-list">
+              {activeReqs.map((r, i) => (
+                <li key={i} className="mo-item is-live">
+                  <span className="mo-node" aria-hidden="true" />
+                  <div className="mo-item-body">
+                    <div className="mo-item-title">{r.endpoint || '/chat'}</div>
+                    <div className="mo-meta">{r.elapsed_s}s elapsed · {r.gen_tokens || 0} tokens</div>
                   </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
-        {/* Agent runs */}
-        <div className="mon-section">
-          <h4 className="font-semibold text-text uppercase tracking-wider text-[10px] text-text-muted mb-2">
-            Agent runs
-          </h4>
-          <div id="mon-runs-list">
-            {agentRuns.length === 0 ? (
-              <div className="mon-empty p-3 rounded bg-panel2 border border-border-subtle text-text-muted text-center">
-                No agent runs
-              </div>
-            ) : (
-              agentRuns.map((run, i) => (
-                <div key={i} className="p-2 mb-1.5 rounded bg-panel2 border border-border-subtle">
-                  <div className="font-semibold">{run.title || (run.session_id != null ? `Session ${run.session_id}` : run.id)}</div>
-                  <div className="text-[11px] text-text-muted mt-0.5">{run.running ? 'running' : (run.state || run.status || 'done')}</div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+        <section className="mo-section">
+          <h4>Agent runs</h4>
+          {agentRuns.length === 0 ? standby('No runs', 'Agent runs appear here while they work.') : (
+            <ul className="mo-list">
+              {agentRuns.map((run, i) => (
+                <li key={i} className={`mo-item${run.running ? ' is-live' : ''}`}>
+                  <span className="mo-node" aria-hidden="true" />
+                  <div className="mo-item-body">
+                    <div className="mo-item-title">{run.title || (run.session_id != null ? `Session ${run.session_id}` : run.id)}</div>
+                    <div className="mo-meta">{run.running ? 'running' : (run.state || run.status || 'done')}</div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
-        {/* Recent requests (Last 30 calls) */}
-        <div className="mon-section">
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="font-semibold text-text uppercase tracking-wider text-[10px] text-text-muted m-0">
-              Recent requests (Last 30)
-            </h4>
-            <span className="text-[10px] text-text-muted font-mono">
-              {Math.min(30, recentReqs.length)} calls
-            </span>
+        <section className="mo-section">
+          <div className="mo-section-row">
+            <h4>Recent requests</h4>
+            <span className="mo-mono">{Math.min(30, recentReqs.length)} calls</span>
           </div>
-          <div id="mon-recent-list" className="flex flex-col gap-1.5">
-            {recentReqs.length === 0 ? (
-              <div className="mon-empty p-3 rounded bg-panel2 border border-border-subtle text-text-muted text-center">
-                Waiting for requests…
-              </div>
-            ) : (
-              recentReqs
-                .slice(-30)
-                .reverse()
-                .map((r, i) => (
-                  <div key={i} className="p-2 rounded bg-panel2 border border-border-subtle flex flex-col gap-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-text">{r.endpoint}</span>
-                      {/* a finished request carries tps / duration_s / completion_tokens (core/monitor.py monitor_end);
-                          gen_tps / elapsed_s / gen_tokens exist only while it is running */}
-                      <span className="text-[10px] text-accent font-semibold">{(r.tps || r.gen_tps) ? `${Number(r.tps || r.gen_tps).toFixed(1)} t/s` : ''}</span>
+          {recentReqs.length === 0 ? standby('Waiting', 'Requests show up here as soon as they finish.') : (
+            <ul className="mo-list">
+              {recentReqs.slice(-30).reverse().map((r, i) => (
+                <li key={i} className="mo-item">
+                  <span className="mo-node is-done" aria-hidden="true" />
+                  <div className="mo-item-body">
+                    <div className="mo-item-row">
+                      <span className="mo-mono mo-item-title">{r.endpoint}</span>
+                      <span className="mo-rate">{r.tps || r.gen_tps ? `${Number(r.tps || r.gen_tps).toFixed(1)} t/s` : ''}</span>
                     </div>
-                    <div className="text-[10px] text-text-muted flex justify-between gap-2">
-                      <span className="whitespace-nowrap">
-                        {r.duration_s != null ? `${Number(r.duration_s).toFixed(1)}s` : '—'} · {r.prompt_tokens ?? '–'}→{r.completion_tokens ?? r.gen_tokens ?? '–'} tok
-                      </span>
-                      {/* a split model is launched from its part-1 file: show the model's name, not "-00001-of-00003" */}
-                      <span className="truncate" title={r.model || ''}>{r.source === 'cloud' ? '☁ ' : ''}{cleanModelName(r.model)}</span>
+                    <div className="mo-meta">
+                      {r.duration_s != null ? `${Number(r.duration_s).toFixed(1)}s` : '—'} · {r.prompt_tokens ?? '–'}→{r.completion_tokens ?? r.gen_tokens ?? '–'} tok
+                      <span className="mo-model">{r.source === 'cloud' ? 'cloud · ' : ''}{cleanModelName(r.model)}</span>
                     </div>
                   </div>
-                ))
-            )}
-          </div>
-        </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </div>
     </div>
   );

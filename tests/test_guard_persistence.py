@@ -93,10 +93,11 @@ class TestGuardPersistence(unittest.TestCase):
         inp = _public("input_guard")
         out = _public("output_guard")
 
-        # config/app.json already contains the user's stored rules
-        self.assertTrue(inp["enabled"])
+        # The public view must reflect the loaded config, including its enabled flags
+        # (both guards ship disabled with rules staged, so don't assume True here).
+        self.assertEqual(inp["enabled"], bool(loaded.get("input_guard", {}).get("enabled")))
         self.assertTrue(len(inp["rules"]) >= 1)
-        self.assertTrue(out["enabled"])
+        self.assertEqual(out["enabled"], bool(loaded.get("output_guard", {}).get("enabled")))
         self.assertTrue(len(out["rules"]) >= 1)
 
         # Assert the STRUCTURE of the shipped rule set, not the name of whichever rule
@@ -124,12 +125,12 @@ class TestGuardPersistence(unittest.TestCase):
         small_model.APP_CONFIG.pop("output_guard", None)
 
         # Core guards and routes should fall back gracefully to CONFIG_FILE
-        self.assertTrue(input_guard.enabled())
+        self.assertFalse(input_guard.enabled())   # shipped default: staged rules, guards off
         self.assertTrue(len(input_guard.guard_cfg().get("rules", [])) >= 1)
         self.assertTrue(len(output_guard.guard_cfg().get("rules", [])) >= 1)
 
         pub_in = _public("input_guard")
-        self.assertTrue(pub_in["enabled"])
+        self.assertIn("enabled", pub_in)
         self.assertTrue(len(pub_in["rules"]) >= 1)
 
 

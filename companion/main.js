@@ -23,6 +23,8 @@ const oauthops = require("./oauthops");
 // loaded on first use: playwright-core is only needed once the agent opens a browser
 let _browserops = null;
 const browserops = () => (_browserops = _browserops || require("./browserops"));
+let _testbrowser = null;
+const testbrowser = () => (_testbrowser = _testbrowser || require("./testbrowser"));
 let _excelops = null;
 const excelops = () => (_excelops = _excelops || require("./excelops"));
 const androidops = require("./androidops");
@@ -306,6 +308,7 @@ function createMainWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
       preload: path.resolve(__dirname, "preload.js"),
       devTools: false,
     },
@@ -646,6 +649,10 @@ const OPS = {
   "browser.wait": (p) => browserops().waitFor(p),
   "browser.audit": (p) => browserops().audit(p),
   "browser.close": (p) => browserops().close(p),
+  // visible test-browser window for agent / code mode
+  "browser.window.open": (p) => testbrowser().open(p.url, p.approved_in_app),
+  "browser.window.navigate": (p) => testbrowser().navigate(p.url),
+  "browser.window.close": () => testbrowser().close(),
   // Android emulator / phone over adb (androidops.js)
   "android.devices": androidops.devices,
   "android.boot_avd": androidops.bootAvd,

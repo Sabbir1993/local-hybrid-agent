@@ -421,11 +421,11 @@ class ToolTests(Base):
         self.assertIn("overwrote", self.call("write_file", path="s.py", content="x = 2\n"))
         self.assertEqual(self.fc.files[full("s.py")], "x = 2\n")
 
-    def test_write_size_cap_points_to_skeleton(self):
-        out = self.call("write_file", path="big.py", content="x = 1\n" * 4000)
-        self.assertTrue(out.startswith("error:"))
-        self.assertIn("skeleton", out)
-        self.assertNotIn(full("big.py"), self.fc.files)
+    def test_write_size_cap_saves_a_partial_file_and_says_continue(self):
+        out = self.call("write_file", path="big.py", content="x = 1\n" * 20000)
+        self.assertIn("partly saved", out)
+        self.assertIn("append_file", out)
+        self.assertIn(full("big.py"), self.fc.files)
 
     def test_chunked_build_of_a_large_file(self):
         # acceptance 1: a 1500-line file built only from small calls
@@ -537,46 +537,48 @@ class VerifyAndUndoTests(Base):
         super().tearDown()
 
     def test_syntax_error_reported_and_fixed(self):
+        # Invalid syntax is now rejected before the file is written (fail closed).
         out = self.call("write_file", path="bad.py", content="def f(:\n    pass\n")
-        self.assertIn("verify: FAILED", out)
+        self.assertIn("pre-save syntax validation failed", out)
         self.assertIn("line 1", out)
-        out = self.call("edit_file", path="bad.py", old_string="def f(:", new_string="def f():")
+        self.assertNotIn(full("bad.py"), self.fc.files)
+        out = self.call("write_file", path="bad.py", content="def f():\n    pass\n")
         self.assertIn("verify: OK", out)
 
     def test_json_checked(self):
-        self.assertIn("verify: FAILED", self.call("write_file", path="c.json", content='{"a": 1,}'))
+        out = self.call("write_file", path="c.json", content='{"a": 1,}')
+        self.assertIn("pre-save syntax validation failed", out)
+        self.assertIn("JSON error", out)
         self.assertIn("verify: OK", self.call("write_file", path="d.json", content='{"a": 1}'))
 
-    def test_javascript_uses_companion(self):
-        self.fc.js_ok = False
-        self.assertIn("verify: FAILED", self.call("write_file", path="a.js", content="function ("))
-        self.assertIn("fs.verify", self.fc.ops)
+    def test_javascript_is_checked_before_writing(self):
+        # tree-sitter runs server-side; the companion fs.verify op is only a fallback.
+        out = self.call("write_file", path="a.js", content="function (")
+        self.assertIn("syntax", out.lower())
+        self.assertNotIn(full("a.js"), self.fc.files)
 
     def test_jsx_checked(self):
-        self.assertIn("verify: FAILED", self.call("write_file", path="b.jsx", content="function B() { return <button>; }"))
+        out = self.call("write_file", path="b.jsx", content="function B() { return <button>; }")
+        self.assertIn("syntax", out.lower())
         self.assertIn("verify: OK", self.call("write_file", path="c.jsx", content="function B() { return <button>OK</button>; }"))
 
     def test_unknown_types_are_not_checked(self):
         self.assertNotIn("verify", self.call("write_file", path="n.txt", content="hello"))
 
-    def test_stops_after_max_retries_and_restores_last_good(self):
+    def test_bad_edits_are_refused_before_they_can_corrupt_a_good_file(self):
         self.call("write_file", path="g.py", content="x = 1\n")
-        outs = []
         for i in range(3):
-            outs.append(self.call("edit_file", path="g.py", old_string="x = 1" if i == 0 else f"x = ({i}",
-                                  new_string=f"x = ({i + 1}"))
-        self.assertIn("Attempt 1/3", outs[0])
-        self.assertIn("Attempt 2/3", outs[1])
-        self.assertIn("restored", outs[2])
+            out = self.call("edit_file", path="g.py", old_string="x = 1", new_string=f"x = ({i + 1}")
+            self.assertIn("pre-save syntax validation failed", out)
         self.assertEqual(self.fc.files[full("g.py")], "x = 1\n")
 
     def test_no_auto_restore_for_chunked_writes(self):
-        self.call("write_file", path="h.py", content="class A:\n")           # incomplete but only a first chunk
+        self.call("write_file", path="h.py", content="class A:\n    pass\n")
         out = ""
-        for _ in range(3):
-            out = self.call("append_file", path="h.py", content="    def f(self):")
-        self.assertIn("Stop and tell the user", out)
-        self.assertIn("def f", self.fc.files[full("h.py")])
+        for i in range(3):
+            out = self.call("append_file", path="h.py", content=f"    def f{i}(self): return {i}\n")
+        self.assertIn("verify: OK", out)
+        self.assertIn("def f2", self.fc.files[full("h.py")])
 
     def test_revert_undoes_last_edit_then_earlier_ones(self):
         # acceptance 12

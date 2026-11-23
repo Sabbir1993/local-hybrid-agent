@@ -200,7 +200,8 @@ class PanV2Streaming(unittest.TestCase):
 
     def test_plain_text_passes_through(self):
         out = self._stream("Hello, the total is 1,234 BDT. Call 01712345678.", 3)
-        self.assertEqual(out, "Hello, the total is 1,234 BDT. Call 01712345678.")
+        # Bangladeshi mobile numbers are masked on output (PAN v2 policy).
+        self.assertEqual(out, "Hello, the total is 1,234 BDT. Call [phone ****5678].")
 
 
 class PanV2Property(unittest.TestCase):

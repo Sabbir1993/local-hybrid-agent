@@ -904,6 +904,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleDock: (tab?: DockTab) => {
     const { dockCollapsed, dockTab } = get();
     if (tab) {
+      if ((tab === 'subagents' || tab === 'preview') && get().appMode === 'chat') return;
       if (!dockCollapsed && dockTab === tab) {
         set({ dockCollapsed: true });
       } else {
@@ -915,7 +916,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   setDockCollapsed: (collapsed) => set({ dockCollapsed: collapsed }),
   setDockExpanded: (expanded) => set({ dockExpanded: expanded }),
-  setDockTab: (dockTab) => set({ dockTab, dockCollapsed: false }),
+  setDockTab: (dockTab) => {
+    // Subagents, like Code/Terminal, is an agent/code-mode view. A stray SSE
+    // subagent event in chat mode must not select a tab the user cannot see.
+    if ((dockTab === 'subagents' || dockTab === 'preview') && get().appMode === 'chat') return;
+    set({ dockTab, dockCollapsed: false });
+  },
 
   updateSubagent: (key, data) => set((s) => ({
     activeSubagents: {
@@ -949,8 +955,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       localStorage.setItem('app_mode', appMode);
     } catch (_) {}
     set({ appMode });
-    // In chat mode, hide code & terminal tabs if active
-    if (appMode === 'chat' && (get().dockTab === 'files' || get().dockTab === 'terminal')) {
+    // In chat mode, hide subagents / preview / code / terminal tabs if active
+    if (appMode === 'chat' && (get().dockTab === 'files' || get().dockTab === 'terminal' || get().dockTab === 'subagents' || get().dockTab === 'preview')) {
       set({ dockTab: 'plan' });
     }
     get().fetchSessions();

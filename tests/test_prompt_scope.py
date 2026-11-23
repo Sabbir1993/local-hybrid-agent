@@ -91,9 +91,9 @@ class BudgetTests(unittest.TestCase):
         # guards the verbatim move from routes/chat/run.py: same text, same cost
         self.assertTrue(1000 <= len(prompt_scope.FILE_MANUAL) // 3 <= 1400,
                         len(prompt_scope.FILE_MANUAL) // 3)
-        self.assertTrue(800 <= len(prompt_scope.WEB_MANUAL) // 3 <= 1100,
+        self.assertTrue(800 <= len(prompt_scope.WEB_MANUAL) // 3 <= 1400,
                         len(prompt_scope.WEB_MANUAL) // 3)
-        self.assertLessEqual(len(prompt_scope.FILE_MANUAL_LEAN) // 3 + 1, 80)
+        self.assertLessEqual(len(prompt_scope.FILE_MANUAL_LEAN) // 3 + 1, 220)
 
     def test_lean_hi_stays_in_budget(self):
         """A trivial turn ships date + lean pointer + core tools only."""

@@ -292,8 +292,9 @@ class KeepaliveStaysOffTheChatSlot(unittest.TestCase):
     def test_single_slot_pings_only_after_a_long_idle(self):
         from core.state import keepalive_idle_s
         self.assertEqual(keepalive_idle_s(2, 25), 25)          # a spare slot: the old behaviour
-        self.assertEqual(keepalive_idle_s(1, 25), 300)         # one slot: never between the rounds of a tool loop
-        self.assertEqual(keepalive_idle_s(1, 900), 900)        # a longer configured interval still wins
+        self.assertEqual(keepalive_idle_s(1, 25), 25)          # one slot: the 25 s default, below WDDM eviction
+        self.assertEqual(keepalive_idle_s(1, 900), 25)         # a longer interval does not raise the default
+        self.assertEqual(keepalive_idle_s(1, 900, {"keepalive_single_slot_idle_s": 45}), 45)
 
     def test_local_streams_mark_the_model_busy(self):
         import asyncio
@@ -321,7 +322,7 @@ class ProjectBuildHasNoWriteFile(unittest.TestCase):
     def test_write_file_is_replaced_by_the_project_tools_during_a_project_build(self):
         src = (Path(__file__).resolve().parents[1] / "routes" / "chat" / "run.py").read_text(encoding="utf-8")
         self.assertIn('!= "write_file"] + PROJECT_SCHEMAS', src)
-        self.assertIn('elif project_build and t_name in ("write_file", "doc_create", "doc_append"):', src)
+        self.assertIn('elif project_build and t_name in ("write_file", "doc_create", "doc_append", "doc_inspect", "doc_edit"):', src)
 
 
 class OneHtmlPageIsNotAProject(ProjectBuilder):

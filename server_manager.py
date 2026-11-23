@@ -76,7 +76,10 @@ app = FastAPI(title="Local Agent", lifespan=lifespan, docs_url=None, redoc_url=N
 
 @app.middleware("http")
 async def capture_audit_ip_middleware(request: Request, call_next):
-    forwarded = request.headers.get("x-forwarded-for")
+    # Trust X-Forwarded-For only when this deployment is explicitly behind a
+    # trusted proxy. Otherwise a client can forge audit-log source addresses.
+    trusted_proxy = bool(os.environ.get("FORWARDED_ALLOW_IPS") or os.environ.get("A770_TRUST_PROXY"))
+    forwarded = request.headers.get("x-forwarded-for") if trusted_proxy else None
     client_ip = (forwarded.split(",")[0].strip() if forwarded else None) or (request.client.host if request.client else "127.0.0.1")
     from core.audit import set_current_ip
     set_current_ip(client_ip)

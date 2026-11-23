@@ -16,7 +16,8 @@ const acts = [
   { type: 'tool_call', id: 'a', name: 'run_python', args: { code: 'print(1)' } },     // never answered
 ];
 const live = ctx.agentActsHtml(JSON.parse(JSON.stringify(acts)), true);
-assert.ok(/Executing/.test(live) && /Working/.test(live), 'a live run still shows progress');
+assert.ok(/antigravity-trace-group/.test(live) && /Worked for/.test(live),
+  'a live run still shows progress');
 const done = ctx.agentActsHtml(JSON.parse(JSON.stringify(acts)), false);
 assert.ok(!/Executing/.test(done), 'a finished message must not show Executing...');
 assert.ok(!/Working…/.test(done), 'nor the Working bar');

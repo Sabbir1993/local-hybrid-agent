@@ -118,7 +118,7 @@ export const Header: React.FC = () => {
 
       <div className="header-divider" />
 
-      {/* Action Tools Cluster: Toggle Right Dock Panel */}
+      {/* Action Tools Cluster: Appearance & Right Dock */}
       <div className="header-actions-cluster">
         <button
           id="btn-dock-toggle"

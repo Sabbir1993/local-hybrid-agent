@@ -74,7 +74,7 @@ class ChatRouteBuildTests(unittest.TestCase):
         lane = SimpleNamespace(model_id="cloud-x", display="cloud-x", provider_name="p")
         calls = []
 
-        async def fake_stream(client, msgs, **kw):
+        async def fake_stream(client, msgs, *args, **kw):
             calls.append({"msgs": json.loads(json.dumps(msgs)), "tools": [t.get("function", {}).get("name") for t in (kw.get("tools") or [])],
                           "tool_choice": kw.get("tool_choice")})
             if len(calls) > len(replies):
@@ -91,8 +91,18 @@ class ChatRouteBuildTests(unittest.TestCase):
 
         from core.small_model import APP_CONFIG
 
+        async def fake_fallback(primary, fallback, msgs, *args, **kw):
+            # The example config maps main to a cloud lane: the route uses the
+            # fallback-aware wrapper, so script it too instead of letting a real
+            # CloudClient mock answer with AsyncMock status codes.
+            tools = args[0] if args else kw.get("tools")
+            rest = {k: v for k, v in kw.items() if k != "tools"}
+            async for item in fake_stream(primary, msgs, tools=tools, **rest):
+                yield item
+
         async def main():
             with (mock.patch.object(chat_route.run.cloud, "cloud_lane", return_value=lane),
+                  mock.patch.object(chat_route.run.common, "_llm_chat_stream_with_fallback", new=fake_fallback),
                   mock.patch.object(chat_route.run.cloud, "CloudClient"),
                   mock.patch.object(chat_route.run.input_guard, "check_async", mock.AsyncMock(return_value=None)),
                   mock.patch.object(chat_route.run, "allowed_source_ids_for", return_value={1}),

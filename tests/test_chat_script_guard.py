@@ -208,7 +208,8 @@ class EmptyWrites(unittest.TestCase):
         from pathlib import Path
         with tempfile.TemporaryDirectory() as td, \
                 mock.patch.object(core.agent_tools, "COMMON_ROOT", Path(td)), \
-                mock.patch.object(sys.modules["core.agent_tools.workspace"], "get_current_user_id", return_value=7):
+                mock.patch.object(sys.modules["core.agent_tools.workspace"], "get_current_user_id", return_value=7), \
+                mock.patch.object(sys.modules["core.agent_tools.common_writer"], "get_current_user_id", return_value=7):
             for body in ("", "   \n"):
                 r = tool_write_file_common({"path": "page.html", "content": body})
                 self.assertTrue(r.startswith("error:"), r)

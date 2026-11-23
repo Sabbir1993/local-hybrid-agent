@@ -58,7 +58,12 @@ def get_user_by_email(email: str) -> Optional[sqlite3.Row]:
         row = db().execute("SELECT * FROM users WHERE email = ? OR username = ?", (prefix, prefix)).fetchone()
         if row:
             return row
-        return db().execute("SELECT * FROM users WHERE email LIKE ? OR username LIKE ?", (f"{prefix}@%", f"{prefix}@%")).fetchone()
+        # Escape LIKE metacharacters from user input: an unescaped '%'/'_' in a
+        # login name must not match (and lock out) other people's accounts.
+        safe = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return db().execute(
+            "SELECT * FROM users WHERE email LIKE ? ESCAPE '\\' OR username LIKE ? ESCAPE '\\'",
+            (f"{safe}@%", f"{safe}@%")).fetchone()
     elif has_email:
         row = db().execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
         if row:
@@ -66,7 +71,8 @@ def get_user_by_email(email: str) -> Optional[sqlite3.Row]:
         row = db().execute("SELECT * FROM users WHERE email = ?", (prefix,)).fetchone()
         if row:
             return row
-        return db().execute("SELECT * FROM users WHERE email LIKE ?", (f"{prefix}@%",)).fetchone()
+        safe = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return db().execute("SELECT * FROM users WHERE email LIKE ? ESCAPE '\\'", (f"{safe}@%",)).fetchone()
     elif has_un:
         row = db().execute("SELECT * FROM users WHERE username = ?", (email,)).fetchone()
         if row:

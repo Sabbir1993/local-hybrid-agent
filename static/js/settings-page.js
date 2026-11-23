@@ -233,7 +233,10 @@ pollStatus();
 
 // Theme picker + DB console link (formerly inline onclick handlers)
 document.querySelectorAll('.theme-opt[data-t]').forEach(btn => {
-  btn.addEventListener('click', () => setTheme(btn.getAttribute('data-t')));
+  btn.addEventListener('click', () => {
+    setTheme(btn.getAttribute('data-t'));
+    if (window.saveAppearance) window.saveAppearance({ theme: btn.getAttribute('data-t') });
+  });
 });
 document.querySelectorAll('[data-open-db]').forEach(a => {
   a.addEventListener('click', () => localStorage.setItem('a770_open_db', '1'));
@@ -454,4 +457,181 @@ window.initSubagentsPanel = initSubagentsPanel;
   };
 
   load();
+})();
+
+// Per-user Appearance & Themes: load from the account, save back to the account.
+(function initAppearancePanel() {
+  const panel = document.getElementById('sec-theme');
+  if (!panel) return;
+  const status = document.getElementById('appearance-status');
+  const root = document.documentElement;
+  let prefs = null;
+
+  const toast = (msg, bad) => {
+    if (!status) return;
+    status.textContent = msg;
+    status.style.color = bad ? '#f43f5e' : '';
+  };
+
+  function apply(p) {
+    prefs = p;
+    root.setAttribute('data-mode', p.mode);
+    root.setAttribute('data-font', p.font);
+    root.classList.toggle('contrast-strong', p.contrast === 'strong');
+    root.style.setProperty('--bg', p.background);
+    root.style.setProperty('--text', p.foreground);
+    root.style.setProperty('--accent', p.accent);
+    root.style.fontSize = p.font_size + 'px';
+    const effective = p.mode === 'light'
+      ? (p.theme.indexOf('light') >= 0 ? p.theme : 'light')
+      : p.mode === 'dark' && p.theme.indexOf('light') >= 0 ? 'slate' : p.theme;
+    setTheme(effective);
+    const put = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+    const pick = (attr, value) => panel.querySelectorAll('[' + attr + ']').forEach(b => b.classList.toggle('active', b.getAttribute(attr) === value));
+    pick('data-mode', p.mode);
+    pick('data-contrast', p.contrast);
+    pick('data-mode-step', p.conversation_steps);
+    put('ap-theme', p.theme); put('ap-font', p.font);
+    put('ap-size', String(p.font_size));
+    put('ap-bg', p.background); put('ap-fg', p.foreground); put('ap-accent', p.accent);
+    ['bg', 'fg', 'accent'].forEach(k => {
+      const c = document.getElementById('ap-c-' + k), t = document.getElementById('ap-t-' + k);
+      if (c) c.value = p[k === 'bg' ? 'background' : k === 'fg' ? 'foreground' : 'accent'];
+      if (t) t.textContent = p[k === 'bg' ? 'background' : k === 'fg' ? 'foreground' : 'accent'];
+    });
+  }
+
+  async function save(patch) {
+    try {
+      const r = await fetch('/control/appearance', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch || prefs || {}),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+      apply(data);
+      toast('Appearance saved for your account', false);
+    } catch (e) { toast('Could not save appearance: ' + e.message, true); }
+  }
+  window.saveAppearance = save;
+
+  const active = (attr) => panel.querySelector('[' + attr + '].active')?.getAttribute(attr);
+  const collect = () => ({
+    mode: active('data-mode') || 'system',
+    contrast: active('data-contrast') || 'default',
+    font: document.getElementById('ap-font')?.value,
+    font_size: Number(document.getElementById('ap-size')?.value || 14),
+    theme: document.getElementById('ap-theme')?.value,
+    conversation_steps: active('data-mode-step') || 'default',
+    background: document.getElementById('ap-bg')?.value,
+    foreground: document.getElementById('ap-fg')?.value,
+    accent: document.getElementById('ap-accent')?.value,
+  });
+
+  panel.addEventListener('change', (e) => {
+    if (!e.target?.id?.startsWith('ap-')) return;
+    const id = e.target.id;
+    if (id.startsWith('ap-c-')) {
+      const key = id.slice(5) === 'bg' ? 'background' : id.slice(5) === 'fg' ? 'foreground' : 'accent';
+      const text = document.getElementById('ap-t-' + id.slice(5));
+      if (text) text.textContent = e.target.value;
+      document.getElementById('ap-' + (key === 'background' ? 'bg' : key === 'foreground' ? 'fg' : 'accent')).value = e.target.value;
+      save({ [key]: e.target.value });
+    } else {
+      save(collect());
+    }
+  });
+  panel.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-mode], [data-contrast], [data-mode-step]');
+    if (!btn) return;
+    const attr = ['data-mode', 'data-contrast', 'data-mode-step'].find(a => btn.hasAttribute(a));
+    panel.querySelectorAll('[' + attr + ']').forEach(b => b.classList.toggle('active', b === btn));
+    save(collect());
+  });
+  const saveBtn = document.getElementById('ap-save');
+  if (saveBtn) saveBtn.onclick = () => save(collect());
+
+  fetch('/control/appearance').then(r => r.ok ? r.json() : null).then(d => { if (d) apply(d); }).catch(() => {});
+})();
+
+// Account panels: profile readout and password change (moved out of the user menu).
+(function initAccountPanels() {
+  const u = window.__user || {};
+  const fill = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+  fill('prof-display-name', u.display_name || u.username);
+  fill('prof-email', u.email || u.username);
+  fill('prof-employee-id', u.employee_id);
+  fill('prof-department', u.department);
+  fill('prof-designation', u.designation);
+  fill('prof-dob', u.dob);
+  fill('prof-gender', u.gender);
+  const role = document.getElementById('prof-role');
+  if (role) role.textContent = (u.role_names || []).join(', ') || (u.is_super_admin ? 'Super admin' : 'User');
+  const avatar = document.getElementById('prof-avatar');
+  if (avatar) {
+    if (u.image) avatar.innerHTML = '<img src="' + u.image + '" alt="Avatar">';
+    else avatar.textContent = ((u.display_name || u.email || 'SH').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase());
+  }
+
+  const imageFile = document.getElementById('prof-image-file');
+  let imageData = u.image || '';
+  if (imageFile) imageFile.onchange = () => {
+    const f = imageFile.files && imageFile.files[0];
+    if (!f) return;
+    if (f.size > 2 * 1024 * 1024) { const s = document.getElementById('prof-status'); if (s) { s.textContent = 'Image must be under 2MB'; s.style.color = '#f43f5e'; } return; }
+    const rd = new FileReader();
+    rd.onload = () => { imageData = String(rd.result || ''); if (avatar) avatar.innerHTML = '<img src="' + imageData + '" alt="Avatar">'; };
+    rd.readAsDataURL(f);
+  };
+
+  const profileBtn = document.getElementById('prof-save');
+  if (profileBtn) profileBtn.onclick = async () => {
+    const status = document.getElementById('prof-status');
+    profileBtn.disabled = true;
+    if (status) status.textContent = 'Saving…';
+    try {
+      const r = await fetch('/auth/profile', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          display_name: document.getElementById('prof-display-name')?.value,
+          email: document.getElementById('prof-email')?.value,
+          employee_id: document.getElementById('prof-employee-id')?.value,
+          department: document.getElementById('prof-department')?.value,
+          designation: document.getElementById('prof-designation')?.value,
+          dob: document.getElementById('prof-dob')?.value,
+          gender: document.getElementById('prof-gender')?.value,
+          image: imageData,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+      if (status) { status.textContent = 'Profile saved.'; status.style.color = ''; }
+    } catch (e) {
+      if (status) { status.textContent = e.message; status.style.color = '#f43f5e'; }
+    } finally { profileBtn.disabled = false; }
+  };
+
+  const btn = document.getElementById('pwd-save-btn');
+  const status = document.getElementById('pwd-status');
+  if (!btn) return;
+  btn.onclick = async () => {
+    const cur = document.getElementById('pwd-current')?.value || '';
+    const next = document.getElementById('pwd-new')?.value || '';
+    const confirm = document.getElementById('pwd-confirm')?.value || '';
+    if (next !== confirm) { status.textContent = 'New passwords do not match.'; status.style.color = '#f43f5e'; return; }
+    btn.disabled = true;
+    status.textContent = 'Saving…';
+    try {
+      const r = await fetch('/auth/change_password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ current_password: cur, new_password: next }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+      status.textContent = 'Password changed.'; status.style.color = '';
+      ['pwd-current', 'pwd-new', 'pwd-confirm'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    } catch (e) {
+      status.textContent = e.message; status.style.color = '#f43f5e';
+    } finally { btn.disabled = false; }
+  };
 })();

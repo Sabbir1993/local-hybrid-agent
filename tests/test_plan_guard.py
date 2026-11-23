@@ -62,7 +62,9 @@ class AutoPlan(unittest.TestCase):
     def test_parse_steps(self):
         from core.agent_loop import auto_plan as ap
         self.assertEqual(ap.parse_steps('{"steps": ["a", "b", "c"]}'), ["a", "b", "c"])
-        self.assertEqual(ap.parse_steps('<think>x</think>```json\n{"steps": [{"text": "a"}, "b"]}\n```'), ["a", "b"])
+        mixed = ap.parse_steps('<think>x</think>```json\n{"steps": [{"text": "a"}, "b"]}\n```')
+        self.assertEqual([s["text"] if isinstance(s, dict) else s for s in mixed], ["a", "b"])
+        self.assertEqual(mixed[0]["ord"], 1)
         self.assertEqual(ap.parse_steps("no json"), [])
         self.assertEqual(ap.parse_steps('{"steps": ["only one"]}'), [])
         self.assertEqual(ap.parse_steps('{"steps": "nope"}'), [])

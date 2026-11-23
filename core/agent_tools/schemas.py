@@ -71,6 +71,7 @@ AGENT_TOOLS = [
                     "path": {"type": "string"},
                     "content": {"type": "string"},
                     "overwrite": {"type": "boolean", "description": "replace an existing file completely (rarely needed - prefer edit_file)"},
+                    "shrink_ok": {"type": "boolean", "description": "confirm a deliberately shorter full rewrite of a file you built this session. Only send this after a tool result says the rewrite 'would replace' a longer version - e.g. rebuilding a broken file from scratch. Without it the guard protects finished sections from an accidental skeleton restart."},
                 },
                 "required": ["path", "content"],
             },

@@ -23,7 +23,9 @@ _KNOWN_SUFFIXES = (".py", ".js", ".jsx", ".ts", ".css", ".html", ".md", ".json",
 # Files that legitimately do not exist in the tree because they are generated
 # at runtime (per-session or per-user) or are intentionally git-ignored output.
 # A path change still fails the test; these are only about presence in the repo.
-_RUNTIME_PATHS = {"plan.md", "PLAN.md", "profile.md", "preferences.md", "lessons.md"}
+_RUNTIME_PATHS = {"plan.md", "PLAN.md", "profile.md", "preferences.md", "lessons.md",
+                  # external tooling files documented by setup guides, not repo files
+                  "config.json", "setvars.sh", "settings.yml"}
 _IGNORED_SUFFIX = (".chunks",)
 # Intentional absences: git-ignored eval output (R5, 2026-10-06) is documented
 # as ignored, and a plain `run.py`/`config.py` inside a module bullet is short
@@ -55,8 +57,13 @@ def _doc_files() -> list:
     # archives are a frozen snapshot of an older tree; checking them for
     # freshness would fail forever on purpose, so keep only the repo root
     # and the live docs/ (one level deep), not docs/history/
+    # Root planning/changelog documents describe intended or historical trees;
+    # their backticked paths are not claims about the current checkout.
+    _ARCHIVED_ROOT_DOCS = {"CHANGELOG.md", "IMPROVEMENT_PLAN_TO_SOTA.md",
+                           "PLAN_FIRECRAWL_TASKBOARD_WEBCHECK.md", "convet_to_react.md",
+                           "TESTING_LOG.md", "input_out_sample.md"}
     files = [f for f in files
-             if f.parent in (REPO, REPO / "docs")]
+             if f.parent in (REPO, REPO / "docs") and f.name not in _ARCHIVED_ROOT_DOCS]
     return sorted(set(files))
 
 

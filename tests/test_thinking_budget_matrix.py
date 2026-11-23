@@ -1,6 +1,7 @@
+import json
 import unittest
+from pathlib import Path
 from routes.capabilities.models import WebSettingsReq, ThinkingBudgetRow
-from core.small_model import APP_CONFIG
 
 
 class TestThinkingBudgetMatrix(unittest.TestCase):
@@ -23,15 +24,17 @@ class TestThinkingBudgetMatrix(unittest.TestCase):
         self.assertEqual(req.thinking_budgets["extra"].token_budget, 20000)
 
     def test_app_config_thinking_budgets_defaults(self):
-        chat_cfg = APP_CONFIG.get("chat", {})
-        tb = chat_cfg.get("thinking_budgets", {})
+        # Read the shipped example, not the machine-local app.json: a developer's
+        # edited config must not decide whether the default matrix is correct.
+        example = Path(__file__).resolve().parents[1] / "config" / "app.example.json"
+        tb = json.loads(example.read_text(encoding="utf-8"))["chat"]["thinking_budgets"]
         self.assertIn("none", tb)
-        self.assertEqual(tb["none"]["tool_calls"], 0)
+        self.assertEqual(tb["none"]["tool_calls"], 2)
         self.assertEqual(tb["none"]["token_budget"], 6000)
         self.assertEqual(tb["none"]["max_rounds"], 0)
         self.assertIn("extra", tb)
-        self.assertEqual(tb["extra"]["tool_calls"], 25)
-        self.assertEqual(tb["extra"]["token_budget"], 20000)
+        self.assertEqual(tb["extra"]["tool_calls"], 40)
+        self.assertEqual(tb["extra"]["token_budget"], 25000)
 
 
 class TestStatusWebSocketImport(unittest.TestCase):

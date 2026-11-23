@@ -78,6 +78,31 @@ async def tool_browser_check(args: dict) -> str:
     return _clip(md + tail)
 
 
+async def tool_browser_preview(args: dict) -> str:
+    """Open the page the agent just built in a visible browser on the user's device and audit it.
+
+    Report-only: the audit text is returned to the agent/user, never used as a hard gate.
+    """
+    url = str(args.get("url") or "").strip()
+    if not url:
+        return "error: url required (the local dev URL or a file:// path inside the approved workspace)"
+    session = f"preview-{_base(args)['session']}"
+    want_shot = args.get("screenshot", True) is not False
+    try:
+        # Browsing happens in the right dock's browser (no pop-up window).
+        d = await audit_page(url, session, device=args.get("device"), headless=True, screenshot=want_shot)
+        text = render_audit(d)
+        if d.get("png_b64"):
+            text += "\n\n" + await handle_screenshot("browser_preview", {"describe": bool(args.get("describe"))},
+                                                     d["png_b64"], "preview", _SHOT_QUESTION)
+    except Exception as e:
+        return _err(e)
+    return _clip(_mask(
+        "UI audit: " + text +
+        "\n\nOpen this URL in the right dock's browser to view it. Report-only: fix what it lists, then call browser_preview again to verify."
+    ))
+
+
 async def tool_browser_check_report(args: dict) -> str:
     run_id = str(args.get("run_id") or "").strip()
     if not run_id:

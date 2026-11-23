@@ -15,8 +15,7 @@ function externalImageButton(url, alt) {
   const safeUrl = String(url).replace(/"/g, '&quot;');
   return `<div class="chat-inline-media-card" style="display:inline-flex; align-items:center; gap:10px; margin:6px 0; padding:6px 10px; border-radius:8px; background:var(--panel2, rgba(255,255,255,0.03)); border:1px solid var(--border, #334155); max-width:440px; vertical-align:middle;">
     <div style="position:relative; width:44px; height:44px; min-width:44px; border-radius:6px; overflow:hidden; background:rgba(0,0,0,0.3); display:flex; align-items:center; justify-content:center; border:1px solid var(--border-subtle, rgba(255,255,255,0.08)); cursor:pointer;" data-preview-path="${safeUrl}" data-preview-title="${cleanTitle}" title="Click to view full resolution">
-      <img src="${safeUrl}" alt="${cleanTitle}" loading="lazy" style="width:100%; height:100%; object-fit:cover; display:block;" onerror="this.onerror=null; this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';" />
-      <span style="display:none; font-size:16px;">🖼️</span>
+      <span data-load-src="${safeUrl}" data-load-alt="${cleanTitle}" style="font-size:20px; line-height:1; user-select:none;">🖼️</span>
     </div>
     <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:2px;">
       <div style="font-size:12px; font-weight:600; color:var(--text, #f3f4f6); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${cleanTitle}">${cleanTitle}</div>

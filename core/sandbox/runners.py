@@ -249,9 +249,9 @@ def get_runner(backend_name: Optional[str] = None) -> BaseRunner:
         if cfg_backend == "remote":
             return RemoteRunner()
 
-    # Default fallback logic:
-    # If remote runner URL and credentials configured, use RemoteRunner.
+    # No silent host fallback: an unpaired/unconfigured app must fail closed,
+    # never run model-authored Python on the server itself.
     if config.configured():
         return RemoteRunner()
-    # Otherwise, use LocalJobRunner
-    return LocalJobRunner()
+    raise RuntimeError("no code runner configured: pair the isolated runner, or set "
+                       "SANDBOX_BACKEND=local with A770_ALLOW_LOCAL_RUNNER=1 for development")

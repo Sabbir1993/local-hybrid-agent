@@ -129,6 +129,15 @@ class RestartIsRefused(Base):
         self.assertEqual(self.fake.files["system_report.html"], SKELETON)
         self.assertIn("overwrote", out)
 
+    def test_the_escape_hatch_is_visible_in_the_tool_schema(self):
+        # The guard's error tells the model to pass shrink_ok=true. If the flag is
+        # missing from the schema, the model can never satisfy the guard and loops.
+        from core.agent_tools.schemas import AGENT_TOOLS
+        schema = next(t for t in AGENT_TOOLS if t["function"]["name"] == "write_file")
+        props = schema["function"]["parameters"]["properties"]
+        self.assertIn("overwrite", props)
+        self.assertIn("shrink_ok", props)
+
     def test_a_small_file_can_still_be_rewritten(self):
         async def run():
             await file_ops.tool_write_file({"path": "s.html", "content": SKELETON})

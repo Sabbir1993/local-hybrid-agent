@@ -45,16 +45,19 @@ class UnknownArchitectureTests(unittest.TestCase):
 
 
 class KeepaliveWaitTests(unittest.TestCase):
-    def test_one_slot_waits_300s_unless_the_profile_says_otherwise(self):
+    def test_one_slot_uses_the_profile_value_capped_by_the_interval(self):
         from core.state import keepalive_idle_s
-        self.assertEqual(keepalive_idle_s(1, 25), 300)
-        self.assertEqual(keepalive_idle_s(1, 25, {"keepalive_single_slot_idle_s": 45}), 45)
-        self.assertEqual(keepalive_idle_s(1, 25, {"keepalive_single_slot_idle_s": 3}), 25)      # never below the interval or 10 s
-        self.assertEqual(keepalive_idle_s(2, 25, {"keepalive_single_slot_idle_s": 45}), 25)     # a spare slot: the plain interval
+        self.assertEqual(keepalive_idle_s(1, 300), 25)                                        # documented default
+        self.assertEqual(keepalive_idle_s(1, 300, {"keepalive_single_slot_idle_s": 45}), 45)  # profile wins under the cap
+        self.assertEqual(keepalive_idle_s(1, 25, {"keepalive_single_slot_idle_s": 45}), 25)    # interval is the ceiling
+        self.assertEqual(keepalive_idle_s(1, 300, {"keepalive_single_slot_idle_s": 3}), 10)    # hard floor
+        self.assertEqual(keepalive_idle_s(2, 25, {"keepalive_single_slot_idle_s": 45}), 25)    # a spare slot: the plain interval
 
     def test_a_bad_value_falls_back_to_the_default(self):
         from core.state import keepalive_idle_s
-        self.assertEqual(keepalive_idle_s(1, 25, {"keepalive_single_slot_idle_s": "soon"}), 300)
+        # The documented single-slot default is 25 s (below WDDM's ~70 s eviction),
+        # not 300 s - an invalid profile value must not reintroduce VRAM eviction.
+        self.assertEqual(keepalive_idle_s(1, 300, {"keepalive_single_slot_idle_s": "soon"}), 25)
 
 
 if __name__ == "__main__":

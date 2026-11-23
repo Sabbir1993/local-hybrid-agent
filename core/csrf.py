@@ -53,7 +53,8 @@ CSP = "; ".join((
     "media-src 'self' blob: https:",
     "font-src 'self' data:",
     "connect-src 'self'",
-    "frame-src 'self' blob: https://www.youtube-nocookie.com",
+    # The Preview tab embeds local dev URLs entered in its address bar.
+    "frame-src 'self' blob: http://127.0.0.1:* https://127.0.0.1:* http://localhost:* https://localhost:* https://www.youtube-nocookie.com",
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'self'",

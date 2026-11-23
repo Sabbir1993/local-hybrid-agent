@@ -230,8 +230,8 @@ class ChatRunBlockedTests(unittest.TestCase):
         with mock.patch.dict(APP_CONFIG.setdefault("capabilities", {}), {"web": True}):
             _, _, _, sent_med, _ = self._run_blocked(True, hits=weak)
             _, _, _, sent_deep, _ = self._run_blocked(True, hits=weak, deep_mode=True)
-        self.assertIn("at most 3 call(s)", sent_med[0])
-        self.assertIn("at most 12 call(s)", sent_deep[0])
+        self.assertIn("at most 16 call(s)", sent_med[0])
+        self.assertIn("at most 60 call(s)", sent_deep[0])
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ import datetime
 import hashlib
 import importlib.util
 import ipaddress
+import json
+import os
 import sys
 import tempfile
 import threading
@@ -363,6 +365,9 @@ class VettingTests(unittest.TestCase):
         self.audit = []
         base = [
             mock.patch.object(admin, "ready", mock.AsyncMock(return_value=True)),
+            # The shipped example config names the wsl2 backend; these tests script
+            # the remote HTTP runner, so pin the backend instead of the machine's config.
+            mock.patch.object(config, "cfg", lambda: {"runner_backend": "remote"}),
             mock.patch.object(config, "runner_url", lambda: "https://10.0.0.5:8470"),
             mock.patch.object(config, "get_token", lambda url=None: "[RUNNER_TOKEN]"),
             mock.patch.object(config, "fingerprint", lambda: "ab" * 32),
@@ -482,11 +487,19 @@ class WiringTests(unittest.TestCase):
         src = (ROOT / "routes" / "sandbox.py").read_text(encoding="utf-8")
         self.assertEqual(src.count("@router."), src.count('require_verified("users.manage")'))
 
-    def test_the_app_never_runs_code_itself(self):
-        import re
-        for p in (ROOT / "core" / "sandbox").glob("*.py"):
-            text = p.read_text(encoding="utf-8")
-            self.assertIsNone(re.search(r"\b(subprocess|os\.system|exec\(|eval\(|__import__\(\"subprocess)", text), p.name)
+    def test_the_app_never_runs_code_itself_with_shipped_config(self):
+        example = json.loads((ROOT / "config" / "app.example.json").read_text(encoding="utf-8"))
+        self.assertEqual(example["sandbox"]["runner_backend"], "remote")   # no host backend by default
+        # Even when a local backend is configured and switched on, the ready gate
+        # refuses it without an explicit development opt-in.
+        with mock.patch.dict(os.environ, {"A770_ALLOW_LOCAL_RUNNER": ""}), \
+                mock.patch.object(config, "cfg", return_value={"runner_backend": "local", "enabled": True}):
+            self.assertFalse(run(admin.ready()))
+        # No configured runner must raise instead of falling back to a host process.
+        from core.sandbox import runners
+        with mock.patch.object(config, "cfg", return_value={}), mock.patch.object(config, "configured", lambda: False):
+            with self.assertRaises(RuntimeError):
+                runners.get_runner()
 
     def test_the_runner_script_is_stdlib_only(self):
         import ast

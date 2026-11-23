@@ -56,9 +56,14 @@ from .subagents_endpoint import (
     get_subagents_config,
     save_subagents_config,
 )
+from .appearance import get_appearance, set_appearance   # noqa: F401  (registers routes)
+from .browser_window import open_test_browser   # noqa: F401  (registers routes)
 
 __all__ = [
     "router",
+    "get_appearance",
+    "set_appearance",
+    "open_test_browser",
     "SwitchRequest",
     "KeepaliveRequest",
     "ConfigRequest",

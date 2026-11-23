@@ -21,6 +21,7 @@ import { ProfileModal } from './components/modals/ProfileModal';
 import { LoginPage } from './components/auth/LoginPage';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { logger } from './utils/logger';
+import { loadAppearance } from './utils/appearance';
 import { env } from './config/env';
 import { ThemedToast } from './components/common/ThemedToast';
 import { ThemedDialog } from './components/common/ThemedDialog';
@@ -46,6 +47,9 @@ export function App() {
     (window as any).__user = currentUser;
     (window as any).hasPerm = (perm: string) => hasPerm(perm);
   }, [currentUser, hasPerm]);
+
+  // Per-user appearance must survive a refresh (theme-boot.js only knows localStorage).
+  useEffect(() => { void loadAppearance(); }, []);
 
   // apiFetch calls this on any 401 outside the sign-in endpoints
   useEffect(() => {

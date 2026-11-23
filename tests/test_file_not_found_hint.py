@@ -99,9 +99,9 @@ class ToolBehaviour(unittest.TestCase):
         self.assertIn(REAL, out)                                   # offered as a name, not opened
         self.assertNotIn("write_file", out)
 
-    def test_read_with_no_close_name_still_offers_write_file(self):
+    def test_read_with_no_close_name_warns_before_creating_a_new_file(self):
         out, _ = self._run(file_ops.tool_read_file, {"path": "zzz_unrelated_name.html"}, {"a.html": "x"})
-        self.assertIn("write_file", out)
+        self.assertIn("Do not create a new file", out)
 
     def test_append_to_a_mistyped_name_lands_on_the_file_we_wrote(self):
         out, fake = self._run(file_ops.tool_append_file, {"path": "system_report_aeed236.html", "content": "<p>2</p>"},
@@ -233,7 +233,8 @@ class PersonalAgentEndToEnd(unittest.TestCase):
             return blocked
 
         blocked = self._go(go)
-        self.assertIn("overwrite=true", blocked)                                 # same explicit rule as before
+        self.assertIn("overwrote", blocked)      # the agent may rewrite a file it created itself
+        self.assertNotIn("error:", blocked)
         self.assertEqual(self.fake.files["mine.html"], "v2")
 
     def test_editing_an_old_file_does_not_make_it_overwritable(self):

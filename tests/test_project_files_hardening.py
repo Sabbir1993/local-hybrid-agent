@@ -6,6 +6,7 @@ generic tool errors, Windows names and deliverable cleanup.
 
 Run: python -X utf8 -m unittest tests.test_project_files_hardening -v
 """
+import os
 import re
 import sys
 import tempfile
@@ -93,6 +94,7 @@ class EntryCannotEscape(Base):
         self.assertIn('href="../../../../secret.css"', out)                    # left as it was, not inlined
         self.assertEqual(pf._missing_links(self.root(), "index.html"), [])     # not a project file: not reported either
 
+    @unittest.skipUnless(os.name == "posix", "symlink test needs POSIX symlinks (Windows needs Developer Mode)")
     def test_a_link_inside_the_project_is_not_followed(self):
         self.page()
         outside = self.user_dir() / "outside.txt"

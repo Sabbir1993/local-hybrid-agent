@@ -1,10 +1,12 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { openAgentMemory } from './AgentMemory';
 
 export const SettingsModal: React.FC = () => {
   const { activeModal, setActiveModal, settingsTab } = useAppStore();
   const isOpen = activeModal === 'settings';
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -67,10 +69,19 @@ export const SettingsModal: React.FC = () => {
         </div>
 
         {/* Menu title after left sidebar divider */}
-        <div className="flex items-center px-5 flex-1 min-w-0">
+        <div className="flex items-center px-5 flex-1 min-w-0 justify-between gap-4">
           <span className="font-bold text-xs tracking-wider flex items-center gap-2 text-text whitespace-nowrap flex-shrink-0">
             ⚙️ Settings &amp; Configuration
           </span>
+          <button
+            type="button"
+            className="btn ghost icon-btn icon-only"
+            title="Refresh settings"
+            aria-label="Refresh settings"
+            onClick={() => setReloadKey((k) => k + 1)}
+          >
+            ⟳
+          </button>
         </div>
       </div>
 
@@ -78,6 +89,8 @@ export const SettingsModal: React.FC = () => {
       <div className="flex-1 w-full h-full bg-bg overflow-hidden">
         <iframe
           id="settings-frame"
+          key={reloadKey}
+          ref={frameRef}
           src={iframeUrl}
           title="Settings"
           className="w-full h-full border-none bg-bg"

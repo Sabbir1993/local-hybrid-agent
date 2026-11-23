@@ -14,6 +14,7 @@ def _w(path: Path, text: str) -> None:
     path.write_text(text)
 
 
+@unittest.skipUnless(os.name == "posix", "sysfs symlink layout is POSIX-only")
 class GpuSysfsTests(unittest.TestCase):
     def setUp(self):
         gpu_sysfs._reset_for_tests()

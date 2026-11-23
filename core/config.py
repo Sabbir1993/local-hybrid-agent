@@ -37,7 +37,9 @@ PROJECTS_DB_FILE = BASE_DIR / "projects.db"
 MEMORY_DB_FILE = BASE_DIR / "memory.db"
 AUTH_DB_FILE = BASE_DIR / "auth.db"       # users, roles, permissions, sessions, audit log
 KNOWLEDGE_UPLOADS_DIR = BASE_DIR / "knowledge_uploads"  # uploaded org knowledge-base files
-CONFIG_DIR = BASE_DIR / "config"
+# A770_TEST_CONFIG_DIR lets the test suite run against a throwaway copy of
+# config/*.example.json instead of the machine-local app.json. Unset in normal use.
+CONFIG_DIR = Path(os.environ.get("A770_TEST_CONFIG_DIR") or (BASE_DIR / "config"))
 CONFIG_FILE = CONFIG_DIR / "app.json"          # main app config (models_dir, lanes, capabilities, ...)
 ROLES_FILE = CONFIG_DIR / "roles.json"         # multiagent role definitions (planner/coder/reviewer)
 # A770_MODEL_CONFIGS_FILE points the app at another per-GGUF launch file (benchmarks run a model at a different context

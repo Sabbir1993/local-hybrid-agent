@@ -1,14 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { Check, Circle, Square, X } from 'lucide-react';
 import { useAppStore } from '../../stores/useAppStore';
 import { Spinner } from '../common/AppLoader';
 import '../../styles/tasks.css';
 import { fetchTasks, stopTask, type Task } from '../../services/tasks';
 
 const POLL_MS = 3000;
-
-const MARK: Record<string, string> = {
-  running: '⏳', completed: '✓', failed: '✕', cancelled: '■', stopped: '■', interrupted: '!',
-};
 
 function ago(ts: number | null): string {
   if (!ts) return '';
@@ -18,6 +15,14 @@ function ago(ts: number | null): string {
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;
   return `${Math.round(s / 86400)}d ago`;
 }
+
+const node = (state: Task['state']) => {
+  if (state === 'completed') return <Check size={12} strokeWidth={2.6} />;
+  if (state === 'failed' || state === 'interrupted') return <X size={12} strokeWidth={2.6} />;
+  if (state === 'stopped' || state === 'cancelled') return <Square size={7} strokeWidth={2} />;
+  if (state === 'running') return null;
+  return <Circle size={7} strokeWidth={2} />;
+};
 
 /** Everything running (or recently run) in the background for this user, with Stop. Polls only while shown. */
 export const TasksView: React.FC = () => {
@@ -58,9 +63,9 @@ export const TasksView: React.FC = () => {
 
   if (tasks === null) {
     return failed ? (
-      <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--dim)', fontSize: '12.5px' }}>Could not load tasks ({failed}). Retrying…</div>
+      <div className="tk-error">Could not load tasks ({failed}). Retrying…</div>
     ) : (
-      <Spinner label="Loading tasks…" />
+      <Spinner label="Checking tasks…" />
     );
   }
 
@@ -69,17 +74,22 @@ export const TasksView: React.FC = () => {
 
   if (!tasks.length) {
     return (
-      <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--dim)', fontSize: '12.5px' }}>
-        <div style={{ fontSize: 24, marginBottom: 8 }}>🗂</div>
-        <b>No background tasks</b>
-        <p style={{ marginTop: 6, fontSize: '11.5px' }}>Agent runs, media jobs and knowledge ingests show up here while they work.</p>
+      <div className="tk-empty">
+        <div className="tk-empty-rail" aria-hidden="true"><span /><span /><span /></div>
+        <div className="tk-empty-copy">
+          <span className="tk-empty-kicker">Idle</span>
+          <h2>No background tasks</h2>
+          <p>Agent runs, media jobs and knowledge ingests show up here while they work.</p>
+        </div>
       </div>
     );
   }
 
-  const row = (t: Task) => (
-    <div key={t.id} className={`tk-row tk-${t.state}`} data-task-id={t.id}>
-      <span className="tk-mark" aria-hidden="true">{MARK[t.state] || '•'}</span>
+  const row = (t: Task, isLast: boolean) => (
+    <li key={t.id} className={`tk-row is-${t.state}${isLast ? ' is-last' : ''}`} data-task-id={t.id}>
+      <div className="tk-rail" aria-hidden="true">
+        <span className="tk-node">{node(t.state)}</span>
+      </div>
       <div className="tk-body">
         <div className="tk-title" title={t.title}>{t.title}</div>
         <div className="tk-meta">
@@ -92,25 +102,27 @@ export const TasksView: React.FC = () => {
           {stopping === t.id ? '…' : 'Stop'}
         </button>
       )}
-    </div>
+    </li>
   );
 
   return (
-    <div className="tk-panel">
+    <div className="tk-shell">
       <header className="tk-head">
-        <h3>Background tasks</h3>
-        <span><b>{active.length}</b> running{failed ? <> · <span className="tk-warn">refresh failed</span></> : null}</span>
+        <span className="tk-head-label">Background tasks</span>
+        <span className={`tk-head-count${active.length ? ' is-live' : ''}`}>{active.length}<span> running</span></span>
       </header>
+      {failed ? <div className="tk-error">Refresh failed ({failed}) — showing the last known state.</div> : null}
+
       {active.length > 0 && (
-        <section>
+        <section className="tk-section-wrap">
           <h4 className="tk-section">Running</h4>
-          <div className="tk-list">{active.map(row)}</div>
+          <ul className="tk-list">{active.map((t, i) => row(t, i === active.length - 1))}</ul>
         </section>
       )}
       {recent.length > 0 && (
-        <section>
+        <section className="tk-section-wrap">
           <h4 className="tk-section">Recent</h4>
-          <div className="tk-list">{recent.map(row)}</div>
+          <ul className="tk-list">{recent.map((t, i) => row(t, i === recent.length - 1))}</ul>
         </section>
       )}
     </div>

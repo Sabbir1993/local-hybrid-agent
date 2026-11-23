@@ -229,9 +229,11 @@ class TokenizerTests(unittest.TestCase):
     def test_repo_id_and_local_folder_are_accepted(self):
         self.assertEqual(vllm.resolve_tokenizer("Qwen/Qwen3-8B"), "Qwen/Qwen3-8B")
         self.assertEqual(vllm.resolve_tokenizer("tok"), str(self.root / "models" / "tok"))
-        self.assertEqual(vllm.resolve_tokenizer(str(self.root / "models" / "tok")), str(self.root / "models" / "tok"))
+        absolute = (self.root / "models" / "tok").as_posix()   # resolver rejects backslashes on Windows too
+        self.assertEqual(vllm.resolve_tokenizer(absolute), str(Path(absolute).resolve()))
         self.assertEqual(vllm.resolve_tokenizer(""), "")
 
+    @unittest.skipUnless(os.name == "posix", "symlink escapes need POSIX symlinks (Windows needs Developer Mode)")
     def test_escapes_are_refused(self):
         os.symlink(self.root / "outside", self.root / "models" / "link")
         for v in ("../outside", "tok/../../outside", "x/../../etc", "/etc", str(self.root / "outside"), "..", "link",
@@ -346,6 +348,7 @@ class StatusAndLogRouteTests(unittest.TestCase):
 
 
 # ------------------------------------------------------------------ 3. orphan workers
+@unittest.skipUnless(os.name == "posix", "POSIX process groups and /proc are required to simulate orphan workers")
 class OrphanWorkerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

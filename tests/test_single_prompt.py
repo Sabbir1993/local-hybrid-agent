@@ -42,7 +42,7 @@ class SinglePromptTests(unittest.TestCase):
 
     def _run_python(self, code):
         asyncio.run(agent_tools.tool_run_python({"code": code}))
-        return [c[1] for c in self.comp.calls if c[0] == "shell.run"][-1]
+        return [c[1] for c in self.comp.calls if c[0] == "python.run"][-1]
 
     def test_approved_code_skips_companion_dialog_once(self):
         async def go():
@@ -50,7 +50,7 @@ class SinglePromptTests(unittest.TestCase):
             await agent_tools.tool_run_python({"code": "print(1)"})
             await agent_tools.tool_run_python({"code": "print(1)"})   # approval is single use
         asyncio.run(go())
-        runs = [c[1] for c in self.comp.calls if c[0] == "shell.run"]
+        runs = [c[1] for c in self.comp.calls if c[0] == "python.run"]
         self.assertTrue(runs[0]["approved_in_app"])
         self.assertFalse(runs[1]["approved_in_app"])
 
@@ -59,7 +59,7 @@ class SinglePromptTests(unittest.TestCase):
             shell_tools.mark_code_approved("print(1)")
             await agent_tools.tool_run_python({"code": "import os; os.remove('x')"})
         asyncio.run(go())
-        runs = [c[1] for c in self.comp.calls if c[0] == "shell.run"]
+        runs = [c[1] for c in self.comp.calls if c[0] == "python.run"]
         self.assertFalse(runs[-1]["approved_in_app"])
 
     def test_ask_first_off_counts_as_approved(self):

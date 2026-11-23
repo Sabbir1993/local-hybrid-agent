@@ -1,8 +1,40 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import Editor from '@monaco-editor/react';
+import { Database, File, FileCode2, FileImage, FileJson2, FileText, Folder, FolderOpen } from 'lucide-react';
 import { apiFetch } from '../../services/api';
-import { hlCode, hlLangFor } from '../../utils/highlight';
 import { useAppStore } from '../../stores/useAppStore';
 import { agentWsParam } from '../../utils/wsTarget';
+import '../../styles/code-dock.css';
+
+const MONACO_LANG: Record<string, string> = {
+  py: 'python', js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  ts: 'typescript', tsx: 'typescript', html: 'html', htm: 'html', svg: 'xml', css: 'css',
+  scss: 'scss', json: 'json', jsonc: 'json', md: 'markdown', yml: 'yaml', yaml: 'yaml',
+  sh: 'shell', bash: 'shell', ps1: 'powershell', sql: 'sql', xml: 'xml', toml: 'ini',
+};
+function monacoLang(path: string): string {
+  const ext = (path.split('.').pop() || '').toLowerCase();
+  return MONACO_LANG[ext] || 'plaintext';
+}
+function isLightTheme(): boolean {
+  const t = document.documentElement.getAttribute('data-theme') || '';
+  return t.includes('light');
+}
+
+const CODE_EXT = new Set(['py', 'js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'html', 'htm', 'css', 'scss',
+  'go', 'rs', 'java', 'c', 'cpp', 'sh', 'bash', 'ps1', 'sql', 'yml', 'yaml', 'toml', 'xml', 'vue']);
+const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico']);
+const DOC_EXT = new Set(['md', 'txt', 'log', 'pdf', 'docx', 'pptx', 'xlsx', 'csv']);
+
+export function FileIcon({ name }: { name: string }) {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  const Icon = ext === 'json' || ext === 'jsonc' ? FileJson2
+    : CODE_EXT.has(ext) ? FileCode2
+      : IMAGE_EXT.has(ext) ? FileImage
+        : DOC_EXT.has(ext) ? FileText
+          : ext.startsWith('db') ? Database : File;
+  return <Icon size={14} className={`ws-file-icon ext-${ext}`} aria-hidden="true" />;
+}
 
 interface WsNode {
   name: string;
@@ -66,8 +98,8 @@ const Dir: React.FC<Omit<LevelProps, 'path' | 'onMeta'> & { node: WsNode }> = ({
         title={node.path}
         onClick={() => setOpen((o) => !o)}
       >
-        <span className="caret">▶</span>
-        <span>📁</span>
+        <span className="caret">›</span>
+        {open ? <FolderOpen size={14} className="ws-dir-icon" aria-hidden="true" /> : <Folder size={14} className="ws-dir-icon" aria-hidden="true" />}
         <span className="nm">{node.name}</span>
         {onNewFolder && (
           <button
@@ -106,7 +138,11 @@ const Level: React.FC<LevelProps> = ({ path, filter, reloadKey, onOpenFile, dept
 
   if (!state) return <div className="ws-empty" style={{ paddingLeft: 14 + depth * 12 }}>Loading…</div>;
   if (state.error) return <div className="ws-empty">{state.error}</div>;
-  if (!state.nodes.length) return <div className="ws-empty" style={{ padding: `6px 0 0 ${14 + depth * 12}px` }}>(empty)</div>;
+  if (!state.nodes.length) return (
+    <div className="ws-empty" style={{ padding: `10px 0 6px ${14 + depth * 12}px` }}>
+      {depth === 0 ? 'This workspace folder is empty or unreachable — check the companion connection, then refresh.' : '(empty)'}
+    </div>
+  );
 
   // Filtering matches file paths; folders stay so nested matches remain reachable.
   const q = filter.trim().toLowerCase();
@@ -131,8 +167,8 @@ const Level: React.FC<LevelProps> = ({ path, filter, reloadKey, onOpenFile, dept
             }}
             onClick={() => onOpenFile(n.path)}
           >
-            <span className="caret" style={{ visibility: 'hidden' }}>▶</span>
-            <span>📄</span>
+            <span className="caret" style={{ visibility: 'hidden' }}>›</span>
+            <FileIcon name={n.name} />
             <span className="nm">{n.name}</span>
             {n.size != null && <span className="ws-size">{fmtSize(n.size)}</span>}
           </div>
@@ -253,8 +289,6 @@ export const WorkspaceTree: React.FC = () => {
   }
 
   if (file) {
-    const lines = file.content ? file.content.replace(/\n$/, '').split('\n').length : 0;
-    const marker: Record<string, string> = { '+': 'wsdiff-add', '-': 'wsdiff-del', ' ': 'wsdiff-ctx' };
     const badgeClass = file.changed ? (file.status === 'created' ? 'created' : 'modified') : 'unchanged';
     return (
       <div id="ws-file-view" style={{ display: 'flex' }}>
@@ -268,48 +302,68 @@ export const WorkspaceTree: React.FC = () => {
           >
             ← Files
           </button>
-          <span id="ws-file-path" className="mono" title={file.path}>{file.path}</span>
+          <div className="ws-tab"><FileIcon name={file.path} /><span>{file.path.split('/').pop()}</span><span className="ws-tab-x" onClick={() => setFile(null)} title="Close file">×</span></div>
+          <div id="ws-file-path" className="ws-breadcrumb" title={file.path}>
+            {file.path.split(/[\\/]/).map((part, i, arr) => <React.Fragment key={i}><span>{part}</span>{i < arr.length - 1 ? <span className="ws-sep">›</span> : null}</React.Fragment>)}
+          </div>
           <span id="ws-file-badge" className={badgeClass} title="Session change status">
-            {file.changed ? '● ' + (file.status === 'created' ? 'created this session' : 'modified this session') : 'unchanged'}
+            {file.changed ? (file.status === 'created' ? 'created' : 'modified') : 'unchanged'}
           </span>
         </div>
-        <pre id="ws-file-code">
-          {file.changed && file.diff ? (
-            file.diff.map((l, i) => (
-              <span key={i} className={marker[l.t] || 'wsdiff-ctx'}>
-                {(l.t === ' ' ? '  ' : l.t + ' ') + l.s + '\n'}
-              </span>
-            ))
-          ) : (
-            <>
-              {lines > 0 && (
-                <span className="ws-gutter" aria-hidden="true">
-                  {Array.from({ length: lines }, (_, i) => i + 1).join('\n')}
-                </span>
-              )}
-              {file.content ? <span dangerouslySetInnerHTML={{ __html: hlCode(file.content, hlLangFor(file.path)) }} /> : '(empty file)'}
-            </>
-          )}
-        </pre>
+        <div id="ws-file-code" className="ws-monaco-wrap">
+          <Editor
+            height="100%"
+            path={file.path}
+            language={monacoLang(file.path)}
+            value={file.changed && file.diff
+              ? file.diff.map((l) => (l.t === ' ' ? '  ' : l.t + ' ') + l.s).join('\n')
+              : (file.content || '')}
+            theme={isLightTheme() ? 'light' : 'vs-dark'}
+            loading={<span className="ws-monaco-loading">Loading editor…</span>}
+            options={{
+              readOnly: true,
+              minimap: { enabled: false },
+              fontSize: 12,
+              lineHeight: 19,
+              fontFamily: "'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace",
+              scrollBeyondLastLine: false,
+              wordWrap: 'on',
+              renderLineHighlight: 'line',
+              automaticLayout: true,
+              padding: { top: 8, bottom: 8 },
+              folding: true,
+              glyphMargin: false,
+              overviewRulerLanes: 0,
+              scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+            }}
+          />
+        </div>
       </div>
     );
   }
 
   return (
     <div id="ws-tree-view">
-      <div id="ws-root-path" className="mono" title="Workspace root directory on disk" style={{ padding: 8, fontSize: 11, color: 'var(--dim)' }}>
-        📁 {root || (inAgent ? agentDir : project?.path) || ''}
-      </div>
+      <header className="code-head">
+        <div className="code-head-row">
+          <span className="code-head-label">Workspace</span>
+          <span className="code-head-count">{changes.length}<span> changed</span></span>
+        </div>
+        <div id="ws-root-path" className="mono" title="Workspace root directory on disk">
+          {root || (inAgent ? agentDir : project?.path) || ''}
+        </div>
+      </header>
       {changes.length > 0 && (
         <div id="ws-changes" style={{ display: 'block' }}>
           <div className="ws-changes-head" id="ws-changes-toggle" title="Files the agent created or modified this session" onClick={() => setChangesOpen((o) => !o)}>
-            <span className="caret" style={{ transform: changesOpen ? 'rotate(90deg)' : undefined }}>▶</span> Session Changes{' '}
+            <span className="caret" style={{ transform: changesOpen ? 'rotate(90deg)' : undefined }}>›</span> Session changes{' '}
             <span id="ws-changes-count" className="mono">{changes.length}</span>
           </div>
           {changesOpen && (
             <div id="ws-changes-list">
               {changes.map((c) => (
                 <div key={c.path} className="ws-node changed" onClick={() => openFile(c.path)} title={c.path}>
+                  <span className="code-change-node" aria-hidden="true" />
                   <span className="nm">{c.path}</span>
                 </div>
               ))}

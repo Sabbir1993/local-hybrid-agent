@@ -74,6 +74,9 @@ const dockCtx = {
   document: { addEventListener() {}, getElementById: () => null, querySelectorAll: () => [], createElement: () => mkEl('tmp') },
   setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
   clearTimeout() {},
+  setInterval: () => 1,      // init() starts a 1 s syncModel poll; no clock in this VM
+  clearInterval() {},
+  location: { protocol: 'http:', host: '127.0.0.1:8000' },
   Date, console, encodeURIComponent, Promise,
   localStorage: { getItem: () => null, setItem() {} },
 };

@@ -97,8 +97,8 @@ class WebPolicyApiTests(_KbApp):
     def test_policy_payload_has_the_budget_table(self):
         w = self.client.get("/knowledge/policy").json()["web"]
         self.assertEqual(w["tiers"], ["low", "medium", "high", "deep"])
-        self.assertEqual(w["budget"]["partial"]["deep"], 12)
-        self.assertEqual(w["budget"]["open"]["deep"], 20)
+        self.assertEqual(w["budget"]["partial"]["deep"], 16)
+        self.assertEqual(w["budget"]["open"]["deep"], 40)
 
     def test_save_updates_config_and_live_settings(self):
         r = self.client.put("/knowledge/web-policy", json={

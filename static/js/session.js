@@ -90,11 +90,6 @@
     }
 
     dd.innerHTML = `
-      <button type="button" class="user-menu-item" data-action="theme" title="Quick cycle color theme">
-        <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.563-2.512 5.563-5.563C22 6.5 17.5 2 12 2z"/></svg>
-        <span>Theme</span>
-      </button>
-
       <button type="button" class="user-menu-item" data-action="docs" title="Connect external agents, view OpenAI API compatibility &amp; examples">
         <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M6 6h10"/><path d="M6 10h10"/></svg>
         <span>Docs &amp; Guide</span>
@@ -103,11 +98,6 @@
       <button type="button" class="user-menu-item" data-action="nav-settings" title="System Settings and Preferences">
         <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
         <span>Settings</span>
-      </button>
-
-      <button type="button" class="user-menu-item" data-action="nav-mfa" title="Configure Two-Factor Authentication (TOTP)">
-        <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        <span>Two-Factor Auth (2FA)</span>
       </button>
 
       ${canManageUsers ? `
@@ -122,20 +112,6 @@
 
       <div class="user-menu-sep"></div>
 
-      <button type="button" class="user-menu-item" data-action="change-pwd">
-        <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14 9l2 2"/></svg>
-        <span>Change password</span>
-      </button>
-      <div class="user-menu-pwd-form" style="display:none">
-        <input type="password" placeholder="Current password" data-field="current" autocomplete="current-password">
-        <input type="password" placeholder="New password" data-field="new" autocomplete="new-password">
-        <input type="password" placeholder="Confirm new password" data-field="confirm" autocomplete="new-password">
-        <div class="user-menu-msg"></div>
-        <div class="row">
-          <button type="button" class="btn ghost" data-action="pwd-cancel">Cancel</button>
-          <button type="button" class="btn accent" data-action="pwd-save">Save</button>
-        </div>
-      </div>
       <div class="user-menu-sep"></div>
       <button type="button" class="user-menu-item danger" data-action="logout">
         <svg class="um-ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
@@ -150,14 +126,11 @@
     const pwdForm = dd.querySelector('.user-menu-pwd-form');
     const pwdMsg = dd.querySelector('.user-menu-msg');
     if (user.must_change_password) {
-      setTimeout(() => {
-        dd.classList.add('open');
-        pwdForm.style.display = 'flex';
-        pwdMsg.textContent = 'Set a new password (12+ characters, letters and digits) to continue.';
-        pwdMsg.className = 'user-menu-msg err';
-      }, 0);
+      // Password changes now live in Settings → Account → Change password.
+      setTimeout(() => navigateSettings('sec-password'), 0);
     }
     const resetPwdForm = () => {
+      if (!pwdForm) return;
       pwdForm.style.display = 'none';
       pwdMsg.textContent = '';
       pwdMsg.className = 'user-menu-msg';

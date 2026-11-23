@@ -381,8 +381,9 @@ async def tool_write_file(args: dict) -> str:
         # restarting a half-built file with its skeleton throws the finished sections away: make that a deliberate step
         return (f"error: overwrite=true would replace {_lines(before)} lines of {path_arg} with only {_lines(content)} - "
                 "that deletes the sections you already added. Do not restart the file: read_file it to see where you are, "
-                "then add the next section with append_file (or change part of it with edit_file). Only if you really want "
-                "the shorter file, repeat write_file with overwrite=true and shrink_ok=true.")
+                "then add the next section with append_file (or change part of it with edit_file). If the file is broken and "
+                "you really want the shorter version, call write_file again with the SAME path and content plus "
+                "overwrite=true and shrink_ok=true (shrink_ok is a write_file parameter, so it can go in that call).")
     content = _unwrap_fence(content)                  # a model often wraps the whole file in a ```python ... ``` fence
     if args.get("pre_save_check", True) and not args.get("skip_verify"):
         from .verify import validate_code_syntax

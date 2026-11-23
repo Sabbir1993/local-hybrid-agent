@@ -90,6 +90,15 @@ class WebCheckTests(unittest.TestCase):
         self.assertTrue(comp.ops("browser.navigate")[0]["headless"])          # audits are headless by default
         self.assertEqual(comp.ops("browser.audit")[0]["screenshot"], False)
 
+    def test_preview_opens_a_visible_browser_and_reports_without_gating(self):
+        comp, p = self._with({"browser.navigate": self.NAV, "browser.audit": _audit([])})
+        with p:
+            out = run(wc.tool_browser_preview({"url": "http://localhost:5173/", "screenshot": False}))
+        self.assertIn("UI audit", out)
+        self.assertIn("right dock", out)
+        self.assertFalse(comp.ops("browser.window.open"))                # no pop-up window
+        self.assertTrue(comp.ops("browser.audit"))                       # report-only audit still runs
+
     def test_audit_of_a_page_that_will_not_load(self):
         comp, p = self._with({"browser.navigate": {"url": "http://localhost:1/", "title": "", "error": "net::ERR_CONNECTION_REFUSED"}})
         with p:
@@ -190,7 +199,7 @@ class RegistrationTests(unittest.TestCase):
         from routes.agent.constants import EXECUTOR_TEST_TOOLS, PARALLEL_READ_TOOLS
         with mock.patch.dict("core.small_model.APP_CONFIG", {"capabilities": {"browser": True}}):
             browser_tools.register_browser_tools()
-        for name in ("browser_audit", "browser_check", "browser_check_report"):
+        for name in ("browser_audit", "browser_check", "browser_check_report", "browser_preview"):
             self.assertIsNotNone(registry.get(name))
             self.assertIn(name, EXECUTOR_TEST_TOOLS)
             self.assertNotIn(name, PARALLEL_READ_TOOLS)

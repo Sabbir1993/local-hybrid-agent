@@ -1039,7 +1039,10 @@ function agentActsHtml(acts, live = true, msg = null) {
   const subSummaryText = buildAntigravitySubSummary(stream);
 
   const cardOpenMap = (msg && msg._cardOpen) ? msg._cardOpen : null;
-  const isGroupOpen = (cardOpenMap && cardOpenMap['trace-group'] !== undefined) ? cardOpenMap['trace-group'] : true;
+  // While a run is streaming keep the trace group collapsed: the step list grows
+  // every second and pushes the answer off screen. A finished/reloaded message
+  // opens it so the work is reviewable. An explicit user toggle always wins.
+  const isGroupOpen = (cardOpenMap && cardOpenMap['trace-group'] !== undefined) ? cardOpenMap['trace-group'] : !live;
 
   let h = `<div class="agy-agent-container">`;
   h += `<details class="antigravity-trace-group"${isGroupOpen ? ' open' : ''} data-card-id="trace-group">`;

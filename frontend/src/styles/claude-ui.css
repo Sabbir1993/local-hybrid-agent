@@ -884,6 +884,39 @@ footer {
   font-weight: 600;
 }
 
+/* Icon-only dock tabs: full label lives in the hover tooltip (title) and aria-label. */
+.dock-tab-btn.icon-only {
+  position: relative;
+  justify-content: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+}
+
+.dock-tab-btn.icon-only svg {
+  flex: none;
+}
+
+.dock-tab-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  background: #38bdf8;
+  border-radius: 50%;
+  box-shadow: 0 0 6px #38bdf8;
+}
+
+.dock-tab-count {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  font-size: 9px;
+  line-height: 1;
+  opacity: 0.8;
+}
+
 .dock-icon-btn {
   background: transparent;
   border: none;
@@ -1221,79 +1254,337 @@ footer {
   color: var(--text);
 }
 
-/* ---------------- 6. DOCKED 12-STEP PLAN VIEW ---------------- */
+/* ---------------- 6. DOCKED PLAN VIEW — execution trace ---------------- */
 #dock-view-plan {
-  padding: 16px;
-  gap: 14px;
+  padding: 18px 16px 20px;
+  gap: 0;
 }
 
-.plan-doc-header {
-  border-bottom: 1px solid var(--border-subtle);
-  padding-bottom: 12px;
-}
-
-.plan-doc-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text);
-  margin-bottom: 6px;
-  line-height: 1.4;
-}
-
-.plan-doc-progress-bar {
-  width: 100%;
-  height: 4px;
-  background: var(--panel2);
-  border-radius: 2px;
-  overflow: hidden;
-  margin-top: 8px;
-}
-
-.plan-doc-progress-fill {
-  height: 100%;
-  background: var(--green);
-  transition: width 0.3s ease;
-}
-
-.plan-doc-section-title {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  color: var(--dim);
-  margin-top: 10px;
-  margin-bottom: 6px;
-}
-
-.plan-doc-step-item {
+/* Standby: a quiet rail waiting for the first step, not a centred empty card. */
+.plan-empty {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 6px;
+  align-items: stretch;
+  gap: 16px;
+  width: 100%;
+  max-width: 340px;
+  margin-top: 18px;
+  padding: 4px 2px;
+}
+
+.plan-empty-rail {
+  position: relative;
+  width: 13px;
+  flex: 0 0 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  padding-top: 3px;
+}
+
+.plan-empty-rail::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 6px;
+  border-left: 1px dashed var(--border-subtle);
+}
+
+.plan-empty-rail span {
+  position: relative;
+  z-index: 1;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
   border: 1px solid var(--border-subtle);
-  background: var(--panel2);
-  margin-bottom: 6px;
-  font-size: 12.5px;
-  line-height: 1.4;
-  transition: border-color 0.15s;
+  background: var(--panel);
 }
 
-.plan-doc-step-item.st-done {
-  border-color: rgba(63, 185, 80, 0.25);
-  background: rgba(63, 185, 80, 0.05);
-}
-
-.plan-doc-step-item.st-in_progress {
+.plan-empty-rail span:first-child {
   border-color: var(--accent);
   background: var(--accent-bg);
+  box-shadow: 0 0 0 3px var(--accent-bg);
 }
 
-.plan-doc-step-mark {
-  font-size: 13px;
-  flex-shrink: 0;
-  margin-top: 1px;
+.plan-empty-copy {
+  min-width: 0;
 }
+
+.plan-empty-kicker {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+
+.plan-empty-copy h2 {
+  margin: 5px 0 6px;
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.plan-empty-copy p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--dim);
+  max-width: 32ch;
+}
+
+/* Live plan */
+.plan-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+}
+
+.plan-head {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.plan-head-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.plan-head-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.plan-head-count {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--green);
+}
+
+.plan-head-count span {
+  color: var(--dim);
+}
+
+.plan-progress {
+  height: 3px;
+  margin-top: 12px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  overflow: hidden;
+}
+
+.plan-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+  transition: width 260ms ease;
+}
+
+.plan-progress-fill.has-failed {
+  background: var(--amber);
+}
+
+.plan-head-status {
+  margin-top: 8px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+
+.plan-head-status.is-live {
+  color: var(--accent);
+}
+
+.plan-head-status.is-failed {
+  color: var(--amber);
+}
+
+.plan-steps {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+
+.plan-step {
+  --step-color: var(--dim);
+  position: relative;
+  display: flex;
+  gap: 12px;
+  min-height: 44px;
+}
+
+.plan-step-rail {
+  position: relative;
+  width: 13px;
+  flex: 0 0 13px;
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+}
+
+.plan-step:not(.is-last) .plan-step-rail::after {
+  content: "";
+  position: absolute;
+  top: 20px;
+  bottom: -2px;
+  left: 6px;
+  width: 1px;
+  background: var(--border-subtle);
+}
+
+.plan-step.is-done .plan-step-rail::after {
+  background: color-mix(in srgb, var(--green) 35%, transparent);
+}
+
+.plan-step-node {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  color: var(--step-color);
+  border: 1px solid var(--step-color);
+  background: var(--panel);
+}
+
+.plan-step.is-done { --step-color: var(--green); }
+.plan-step.is-done .plan-step-node { background: color-mix(in srgb, var(--green) 16%, var(--panel)); border-color: transparent; }
+.plan-step.is-failed { --step-color: var(--red); }
+.plan-step.is-failed .plan-step-node { background: color-mix(in srgb, var(--red) 16%, var(--panel)); border-color: transparent; }
+.plan-step.is-in_progress { --step-color: var(--accent); }
+.plan-step.is-in_progress .plan-step-node {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+  animation: plan-node-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes plan-node-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--accent-bg); }
+  50% { box-shadow: 0 0 0 5px transparent; }
+}
+
+.plan-step-body {
+  flex: 1;
+  min-width: 0;
+  padding-bottom: 16px;
+}
+
+.plan-step-top {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.plan-step-index {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--dim);
+  flex: 0 0 auto;
+}
+
+.plan-step-text {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.plan-step.is-done .plan-step-text { color: var(--dim); }
+.plan-step.is-in_progress .plan-step-text { font-weight: 600; }
+.plan-step.is-failed .plan-step-text { color: var(--red); }
+
+.plan-step-note {
+  margin: 4px 0 0 27px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+
+.plan-foot {
+  margin-top: 4px;
+  padding: 9px 11px;
+  border-left: 2px solid var(--amber);
+  background: color-mix(in srgb, var(--amber) 7%, transparent);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plan-step.is-in_progress .plan-step-node { animation: none; }
+  .plan-progress-fill { transition: none; }
+}
+
+/* Preview: browser-style chrome */
+.pv-browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--panel2) 60%, transparent);
+}
+.pv-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 25px;
+  height: 25px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.pv-nav-btn:hover { background: var(--panel); color: var(--text); }
+.pv-address {
+  flex: 1;
+  min-width: 0;
+  height: 25px;
+  padding: 0 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+}
+.pv-address:focus { outline: none; border-color: var(--accent); }
+.pv-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--dim);
+}
+.pv-empty-mark {
+  display: inline-flex;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 50%;
+  color: var(--accent);
+  background: var(--accent-bg);
+  margin-bottom: 12px;
+}
+.pv-empty h2 { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--text); }
+.pv-empty p { margin: 0; font-size: 11.5px; line-height: 1.6; max-width: 30ch; }
 
 /* ---------------- 7. CLAUDE-STYLE WEB PREVIEW VIEW (`🌐`) ---------------- */
 #dock-view-preview {

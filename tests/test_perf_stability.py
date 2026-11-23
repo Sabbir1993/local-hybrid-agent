@@ -216,7 +216,7 @@ class DeleteUserTests(_Tmp):
     def _user(self, name):
         now = time.time()
         cur = auth_db.db().execute(
-            "INSERT INTO users (username, created_at, updated_at) VALUES (?, ?, ?)", (name, now, now))
+            "INSERT INTO users (email, created_at, updated_at) VALUES (?, ?, ?)", (name + "@localhost", now, now))
         auth_db.db().commit()
         return cur.lastrowid
 

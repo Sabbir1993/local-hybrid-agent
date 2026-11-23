@@ -493,6 +493,6 @@ async function close(p) {
 module.exports = {
   navigate, snapshot, click, type, press, select, screenshot,
   console: consoleLog, evaluate, waitFor, audit, close,
-  target, getTargetLocators,
+  target, getTargetLocators, checkUrl,
   DEVICE_PRESETS: Object.keys(DEVICE_PRESETS),
 };

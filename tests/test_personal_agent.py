@@ -257,7 +257,7 @@ class LoopFixTests(unittest.TestCase):
 class AgentCardUiTests(unittest.TestCase):
     def test_filters_and_equal_buttons_exist(self):
         js = Path("static/js/custom-agents.js").read_text(encoding="utf-8")
-        for needle in ('id="ca-tool-filter"', 'id="ca-grid-filter"', 'class="ca-act primary btn-settings-run"'):
+        for needle in ('id="ca-tool-filter"', 'id="ca-grid-filter"', 'class="btn btn-settings-run"'):
             self.assertIn(needle, js)
         css = Path("static/css/style.css").read_text(encoding="utf-8")
         self.assertIn("grid-auto-columns: 1fr", css)

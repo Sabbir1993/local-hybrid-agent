@@ -1,6 +1,6 @@
 {
   "name": "ssl-ai",
-  "version": "0.2.106",
+  "version": "0.2.107",
   "description": "SSL Local companion for AI — runs file/shell operations on your own machine on the server's behalf.",
   "main": "main.js",
   "scripts": {

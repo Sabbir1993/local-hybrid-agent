@@ -520,6 +520,12 @@ export const ChatArea: React.FC = () => {
       const path = prevBtn.getAttribute('data-preview-path') || '';
       const title = prevBtn.getAttribute('data-preview-title') || prevBtn.innerText || path;
       const source = (prevBtn.getAttribute('data-preview-source') || 'common') as 'common' | 'ws';
+      // Chat mode has no in-dock Preview, so a generated file opens in a new browser tab.
+      // Other previews (attachments, images, diagrams) keep the in-app modal.
+      if (path && appMode === 'chat' && prevBtn.closest('.file-card')) {
+        window.open(`/agent/raw?path=${encodeURIComponent(path)}`, '_blank', 'noopener,noreferrer');
+        return;
+      }
       if (path) {
         openPreviewModal(path, title, null, source);
       }

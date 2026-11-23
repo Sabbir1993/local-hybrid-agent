@@ -148,7 +148,19 @@ async def set_fetch_allowlist(req: FetchAllowlistRequest, request: Request,
         try:
             net = ipaddress.ip_network(text, strict=False)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"invalid IP or CIDR: {text[:80]}")
+            hint = ""
+            base, sep, prefix = text.partition("/")
+            if sep and prefix.isdigit():
+                try:
+                    max_prefix = 32 if ipaddress.ip_address(base).version == 4 else 128
+                    if int(prefix) > max_prefix:
+                        family = "IPv4" if max_prefix == 32 else "IPv6"
+                        example = "/24" if max_prefix == 32 else "/64"
+                        hint = (f" ({family} prefixes must be /0-/{max_prefix}; "
+                                f"for a LAN subnet use {example}, e.g. 192.168.193.0/24)")
+                except ValueError:
+                    pass
+            raise HTTPException(status_code=400, detail=f"invalid IP or CIDR: {text[:80]}{hint}")
         if any(net.overlaps(meta) or net in meta for meta in _META_NETS):
             raise HTTPException(status_code=400, detail=f"this range is always blocked and cannot be allowed: {text}")
         if text not in cleaned:

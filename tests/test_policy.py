@@ -219,7 +219,7 @@ class ParallelReadWiring(unittest.TestCase):
             p.read_text(encoding="utf-8")
             for p in (Path(__file__).resolve().parents[1] / "routes" / "agent" / "run.py",
                       Path(__file__).resolve().parents[1] / "routes" / "agent" / "stream.py"))
-        self.assertIn("all_reads = bool(parsed_actions) and all(a[0] in PARALLEL_READ_TOOLS", src)
+        self.assertIn("if a[0] in PARALLEL_READ_TOOLS", src)
 
 
 if __name__ == "__main__":

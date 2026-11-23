@@ -238,6 +238,18 @@ class FakeCompanion:
             return {"checked": False, "ok": True, "detail": "server-side check covers this type"}
         if op == "shell.run":
             return await self._shell(params, timeout)
+        if op == "python.run":
+            # The real companion runs the approved script in a subprocess and returns
+            # exit_code/stdout/stderr. Harness scripts are authored in this file, so
+            # running them for real is deterministic (see module docstring).
+            source = params.get("source") or ""
+            cwd = self._resolve(params.get("cwd") or ".")
+            try:
+                r = subprocess.run([sys.executable, "-c", source], cwd=str(cwd), capture_output=True,
+                                   text=True, timeout=min(float(params.get("timeout") or 60), 60))
+                return {"exit_code": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
+            except subprocess.TimeoutExpired:
+                return {"exit_code": -1, "stdout": "", "stderr": "timed out"}
         raise RuntimeError(f"fake companion has no op {op!r} (harness bug: script used an "
                            f"unimplemented tool)")
 
@@ -363,8 +375,8 @@ class MockEvalEnv:
         auth_db._auth_db = None
         auth_common._auth_db = None
         adb = auth_common.db()
-        adb.execute("INSERT OR IGNORE INTO users (id, username, created_at, updated_at)"
-                    " VALUES (?, ?, ?, ?)", (UID, f"u{UID}", time.time(), time.time()))
+        adb.execute("INSERT OR IGNORE INTO users (id, email, created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?)", (UID, f"u{UID}@localhost", time.time(), time.time()))
         adb.commit()
 
         # --- memory chunks DB ---
@@ -422,6 +434,11 @@ class MockEvalEnv:
         self._saved_ex_proc = ex_inst.process
         ex_inst.client = mock_client()
         ex_inst.process = FakePopen()
+        # Golden traces were recorded with a healthy executor. In a clean checkout no
+        # .gguf exists, so `available` (a real filesystem property) would be False and a
+        # new lane_warning SSE event would appear in every trace. Keep the harness hermetic.
+        self._patches.append(mock.patch.object(type(ex_inst), "available", True))
+        self._start_new()
         self._ex_inst = ex_inst
 
         # --- context-budget probe cache: reset so every task measures fresh ---

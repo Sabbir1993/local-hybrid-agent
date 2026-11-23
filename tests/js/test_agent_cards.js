@@ -22,12 +22,13 @@ const tool = [
 ];
 const html = ctx.agentActsHtml(JSON.parse(JSON.stringify(tool)), true);
 
-assert.ok(/agy-expand-btn/.test(html) && /Show arguments/.test(html),
-  'tool args render as a collapsed toggle, not an open dump');
-assert.ok(/agy-args-pre/.test(html) && !/agy-args-pre open/.test(html),
-  'args block exists and starts collapsed');
+assert.ok(/<details class="antigravity-step-item"/.test(html) &&
+          !/<details class="antigravity-step-item"[^>]*\sopen/.test(html),
+  'step drawer starts collapsed');
+assert.ok(/antigravity-drawer-meta/.test(html) && /agy-detail-code/.test(html),
+  'args and result render inside the drawer, not an open dump');
 assert.ok(!/style="color:/.test(html), 'result colour is classed, not inline (D5a)');
-assert.ok(/agy-result-code/.test(html), 'result block uses the capped scroll class');
+assert.ok(/agy-detail-code/.test(html), 'result block uses the capped code class');
 assert.ok(!/onclick=/.test(html), 'no inline onclick handlers (CSP forbids them)');
 assert.ok(!/ src\/app\.js/.test(html) || /\u00b7 src\/app\.js/.test(html),
   'path appears once as a labeled preview, not doubled in the dump');

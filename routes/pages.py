@@ -18,7 +18,7 @@ SETTINGS_FILE = BASE_DIR / "settings.html"
 DIST_DIR = BASE_DIR / "frontend" / "dist"
 DIST_INDEX = DIST_DIR / "index.html"
 DIST_ASSETS_DIR = DIST_DIR / "assets"
-REACT_MISSING = {"error": "React build not found. Run `npm run build` in frontend/."}
+REACT_MISSING = {"error": "This port serves the API only. The web UI runs as a separate frontend app; open that app's URL instead."}
 
 
 # --- React build assets ---

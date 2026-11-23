@@ -17,6 +17,10 @@ const ctx = {
   renderModelPicker: () => { calls.picker++; },
   loadProfiles: () => { calls.profiles++; },
   setLoadBtn() {}, fmtUptime: () => '0s', esc: s => s, console, setTimeout, Math, Number, String,
+  location: { protocol: 'http:', host: '127.0.0.1:8000' },
+  // CLOSED so pollStatus falls through to its HTTP fallback (the real app only
+  // does that when the WS cannot connect; this VM intentionally has no server).
+  WebSocket: Object.assign(function () { this.readyState = 3; }, { OPEN: 1, CONNECTING: 0 }),
 };
 ctx.window = ctx;
 vm.createContext(ctx);

@@ -8,6 +8,8 @@ import os
 import unittest
 from unittest import mock
 
+import _hermetic_env  # noqa: F401  (must run before core.config is imported)
+
 os.environ["A770_NO_USAGE_WRITES"] = "1"
 
 

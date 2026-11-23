@@ -137,7 +137,7 @@ class WhenLintDoesNotRun(Base):
 
     def test_a_syntax_failure_skips_lint(self):
         out = self.edit(old="return 1", new="return (")
-        self.assertIn("verify: FAILED", out)
+        self.assertIn("pre-save syntax validation failed", out)
         self.assertEqual(self.dev.diag_calls, [])
 
     def test_an_old_companion_without_the_op_is_silent(self):
@@ -159,12 +159,14 @@ class WhenLintDoesNotRun(Base):
 class FailingFiles(Base):
     """The plan's 'done' gate asks which files the verify loop last found broken."""
 
-    def test_tracks_the_last_syntax_result_per_file(self):
+    def test_a_bad_edit_is_refused_without_mark_the_file_broken(self):
+        # Invalid syntax is rejected before the file is touched, so the
+        # plan "done" gate never sees a broken file to report.
         self.assertEqual(file_state.failing_files(), [])
-        self.assertIn("verify: FAILED", self.edit(old="return 1", new="return ("))
-        self.assertEqual(file_state.failing_files(), [full("m.py")])
-        self.assertIn("verify: OK", self.edit(old="return (", new="return 3"))
-        self.assertEqual(file_state.failing_files(), [], "a passing write clears it")
+        self.assertIn("pre-save syntax validation failed", self.edit(old="return 1", new="return ("))
+        self.assertEqual(file_state.failing_files(), [])
+        self.assertIn("verify: OK", self.edit(old="return 1", new="return 3"))
+        self.assertEqual(file_state.failing_files(), [])
 
 
 class Wiring(unittest.TestCase):
