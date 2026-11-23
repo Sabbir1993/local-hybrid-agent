@@ -1419,7 +1419,7 @@ async def run_agent_stream(req, user, ctx):
                             user, "agent", last_query, out_text,
                             msgs, main_client, req.verify, _cloud_out):
                         yield _vc
-                    yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
+                    yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note, 'v': 2})}\n\n"
                     yield f"event: done\ndata: {json.dumps({'state': 'completed'})}\n\n"
                     return
 
@@ -2253,7 +2253,7 @@ async def run_agent_stream(req, user, ctx):
                     val_text if (was_synth or not final_content.strip()) else final_content,
                     msgs, main_client, req.verify, _cloud_out):
                 yield _vc
-            yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note})}\n\n"
+            yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note, 'v': 2})}\n\n"
             # elapsed_s is computed below; stop_note never uses it, so pass 0 rather
             # than moving existing code around for an unused field.
             _stop_ctx = StopContext(

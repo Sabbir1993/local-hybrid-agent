@@ -595,7 +595,8 @@ def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600, clie
     rec = {"name": task["name"], "tools": [], "lanes": [], "escalated": False,
            "final_len": 0, "final_text": "", "ok": False, "soft": task.get("soft", False),
            "error": None, "duration_s": None, "events_seen": [], "done_state": None,
-           "guard_hits": [], "kb_blocked": None, "approvals_denied": []}
+           "guard_hits": [], "kb_blocked": None, "approvals_denied": [],
+           "validated": []}     # bounded server codes; `v: 2` proves the deployed build has the empty-answer fix
     payload = {"messages": [{"role": "user", "content": task["prompt"]}],
                "mode": mode, "max_steps": 12, "temperature": 0.3}
     t0 = time.time()
@@ -662,6 +663,10 @@ def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600, clie
                                         json={"req_id": data.get("req_id"), "decision": "allow" if allow else "deny"})
                         except Exception:
                             pass
+                    elif event == "validated":
+                        # Codes only (synthesized / note / build marker), never answer text.
+                        rec["validated"].append({k: data.get(k) for k in ("synthesized", "note", "v")
+                                                 if k in (data or {})})
                     elif event == "delta":
                         rec["final_len"] += len(data.get("text") or "")
                         rec["final_text"] += data.get("text") or ""

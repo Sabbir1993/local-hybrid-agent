@@ -83,7 +83,8 @@ def summarize_task(task_name: str, runs: list, category: str = "misc", soft: boo
                   "done_state": r.get("done_state"),
                   "final_len": r.get("final_len"),
                   "approvals_denied": len(r.get("approvals_denied") or []),
-                  "events_seen": r.get("events_seen") or []} for r in runs],
+                  "events_seen": r.get("events_seen") or [],
+                  "validated": r.get("validated") or []} for r in runs],
     }
 
 
