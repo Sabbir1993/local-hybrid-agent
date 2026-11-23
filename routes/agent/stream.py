@@ -1400,9 +1400,15 @@ async def run_agent_stream(req, user, ctx):
                     # scores streamed text sees "". Emit a visible chunk on this path too,
                     # mirroring the stop path below - regardless of whether the validator
                     # labelled the answer "synthesized".
-                    if not (final_content or "").strip():
+                    # `final_content` comes from the final res_dict, but `delta` events come
+                    # only from content_delta chunks in `streamed_content`. A reasoning model
+                    # can put the answer in res_dict.content while streaming only thought_delta,
+                    # ending with `done: completed` and zero visible answer. Key off what was
+                    # ACTUALLY emitted, not off final_content.
+                    emitted_answer = "".join(str(c or "") for c in (streamed_content or []))
+                    if not emitted_answer.strip():
                         _red.reset()
-                        out_text = (val_text or "").strip() or (
+                        out_text = (val_text or final_content or "").strip() or (
                             "Task completed. All requested operations have been processed in the workspace.")
                         yield f"event: delta\ndata: {json.dumps({'text': out_text})}\n\n"
                     elif was_synth and val_text != final_content:
@@ -1419,7 +1425,7 @@ async def run_agent_stream(req, user, ctx):
                             user, "agent", last_query, out_text,
                             msgs, main_client, req.verify, _cloud_out):
                         yield _vc
-                    yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note, 'v': 2})}\n\n"
+                    yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note, 'v': 3})}\n\n"
                     yield f"event: done\ndata: {json.dumps({'state': 'completed'})}\n\n"
                     return
 
@@ -2243,17 +2249,22 @@ async def run_agent_stream(req, user, ctx):
             # answer the model never actually wrote.
             _outcome_detail = _synth_detail(note)
 
-            if not final_content.strip():
-                yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
+            emitted_answer = "".join(str(c or "") for c in (streamed_content or []))
+            if not emitted_answer.strip():
+                answer_text = (val_text or final_content or "").strip() or (
+                    "Task completed. All requested operations have been processed in the workspace.")
+                yield f"event: delta\ndata: {json.dumps({'text': answer_text})}\n\n"
             elif was_synth and val_text != final_content:
                 yield "event: delta_reset\ndata: {}\n\n"
                 yield f"event: delta\ndata: {json.dumps({'text': val_text})}\n\n"
+                answer_text = val_text
+            else:
+                answer_text = final_content
             async for _vc in answer_check_events(
-                    user, "agent", last_query,
-                    val_text if (was_synth or not final_content.strip()) else final_content,
+                    user, "agent", last_query, answer_text,
                     msgs, main_client, req.verify, _cloud_out):
                 yield _vc
-            yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note, 'v': 2})}\n\n"
+            yield f"event: validated\ndata: {json.dumps({'synthesized': was_synth, 'note': note, 'v': 3})}\n\n"
             # elapsed_s is computed below; stop_note never uses it, so pass 0 rather
             # than moving existing code around for an unused field.
             _stop_ctx = StopContext(

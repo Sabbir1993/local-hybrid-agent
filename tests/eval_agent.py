@@ -596,7 +596,7 @@ def run_live_task(base: str, task: dict, mode: str, timeout_s: float = 600, clie
            "final_len": 0, "final_text": "", "ok": False, "soft": task.get("soft", False),
            "error": None, "duration_s": None, "events_seen": [], "done_state": None,
            "guard_hits": [], "kb_blocked": None, "approvals_denied": [],
-           "validated": []}     # bounded server codes; `v: 2` proves the deployed build has the empty-answer fix
+           "validated": []}     # bounded server codes; `v: 3` proves the deployed build has the empty-answer fix
     payload = {"messages": [{"role": "user", "content": task["prompt"]}],
                "mode": mode, "max_steps": 12, "temperature": 0.3}
     t0 = time.time()

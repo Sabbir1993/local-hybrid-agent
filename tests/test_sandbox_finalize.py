@@ -28,14 +28,18 @@ class MainPathAlwaysEmitsTextTests(unittest.TestCase):
 
     SRC = pathlib.Path(__file__).resolve().parents[1] / "routes" / "agent" / "stream.py"
 
-    def test_empty_final_content_gets_an_unconditional_delta(self):
+    def test_both_finalization_paths_key_off_actually_emitted_text(self):
         src = self.SRC.read_text(encoding="utf-8")
-        self.assertIn('if not (final_content or "").strip():', src)
+        # final_content comes from res_dict; delta comes from streamed_content. Keying
+        # off the former left completed runs with zero visible text.
+        self.assertEqual(src.count('emitted_answer = "".join(str(c or "") for c in (streamed_content or []))'), 2)
+        self.assertEqual(src.count('if not emitted_answer.strip():'), 2)
         self.assertIn("Task completed. All requested operations have been processed in the workspace.", src)
 
     def test_answer_check_sees_the_emitted_text(self):
         src = self.SRC.read_text(encoding="utf-8")
         self.assertIn("last_query, out_text,", src)
+        self.assertIn("last_query, answer_text,", src)
 
 
 if __name__ == "__main__":
