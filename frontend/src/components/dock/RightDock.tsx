@@ -27,7 +27,6 @@ export const RightDock: React.FC = () => {
 
   // Preview tab states
   const [previewText, setPreviewText] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
   type BrowserTab = { id: number; url: string; input: string; title: string; reloadKey: number };
   const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([{ id: 1, url: '', input: '', title: 'New tab', reloadKey: 0 }]);
   const [activeBrowserTab, setActiveBrowserTab] = useState(1);
@@ -184,7 +183,7 @@ export const RightDock: React.FC = () => {
       return () => { current = false; };
     }
     setPreviewText(null);
-  }, [filePath, previewModal?.directContent, rawUrl, isImage, isDirectUrl, reloadKey]);
+  }, [filePath, previewModal?.directContent, rawUrl, isImage, isDirectUrl]);
 
   // Mode rule matching claude-dock.js syncTabVisibility():
   // In chat mode without active custom agent, hide Code & Terminal tabs.
@@ -391,7 +390,7 @@ export const RightDock: React.FC = () => {
                   <img
                     src={rawUrl}
                     alt={previewModal.title || filePath}
-                    key={reloadKey}
+                    key={`${activeTab.id}-${activeTab.reloadKey}`}
                     style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: '8px', boxShadow: '0 4px 20px rgba(0,0,0,0.5)' }}
                   />
                 </div>
