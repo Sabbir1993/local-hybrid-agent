@@ -10,20 +10,41 @@ export const SettingsModal: React.FC = () => {
 
   useEffect(() => {
     if (!isOpen) return;
-    if (window.location.pathname !== '/settings' && !window.location.hash.includes('settings')) {
+    if (window.location.pathname !== '/settings' && !window.location.hash.includes('settings') && !window.location.hash.startsWith('#sec-')) {
       try {
-        window.history.pushState({ modal: 'settings' }, '', '/settings');
+        const curTab = settingsTab || (typeof localStorage !== 'undefined' ? localStorage.getItem('a770_active_settings_tab') : '') || 'sec-theme';
+        const target = curTab.startsWith('sec-') ? curTab : `sec-${curTab}`;
+        window.history.pushState({ modal: 'settings' }, '', `/settings#${target}`);
       } catch (_) {}
     }
-  }, [isOpen]);
+  }, [isOpen, settingsTab]);
 
-  // the Settings page (an iframe) asks for the memory editor, which is part of this app
+  // Sync settingsTab to the iframe if changed externally (e.g. browser back/forward)
+  useEffect(() => {
+    if (!isOpen || !frameRef.current?.contentWindow || !settingsTab) return;
+    try {
+      frameRef.current.contentWindow.postMessage({ type: 'navigate-tab', tab: settingsTab }, '*');
+    } catch (_) {}
+  }, [settingsTab, isOpen]);
+
+  // the Settings page (an iframe) asks for the memory editor, and syncs tab routing
   useEffect(() => {
     if (!isOpen) return;
     const onMsg = (e: MessageEvent) => {
-      // the store's hasPerm already lets a super admin through
-      if (e.origin === window.location.origin && e.data && e.data.type === 'open-agent-memory'
-          && useAppStore.getState().hasPerm('memory.use')) openAgentMemory();
+      if (e.data && typeof e.data === 'object') {
+        if (e.data.type === 'open-agent-memory' && useAppStore.getState().hasPerm('memory.use')) {
+          openAgentMemory();
+        }
+        if (e.data.type === 'settings-tab-change' && e.data.tab) {
+          useAppStore.getState().setSettingsTab(e.data.tab);
+          try {
+            window.history.replaceState(null, '', `/settings#${e.data.tab}`);
+          } catch (_) {}
+        }
+        if (e.data.type === 'profile-updated') {
+          void useAppStore.getState().checkAuth();
+        }
+      }
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
@@ -31,13 +52,21 @@ export const SettingsModal: React.FC = () => {
 
   if (!isOpen) return null;
 
-  const targetTab = settingsTab ? (settingsTab.startsWith('sec-') ? settingsTab : `sec-${settingsTab}`) : 'sec-theme';
+  let initialTab = '';
+  if (typeof window !== 'undefined') {
+    const h = window.location.hash.replace(/^#/, '');
+    if (h && (h.startsWith('sec-') || h.includes('/'))) {
+      initialTab = h;
+    }
+  }
+  const activeTabRaw = initialTab || settingsTab || (typeof localStorage !== 'undefined' ? localStorage.getItem('a770_active_settings_tab') : '') || 'sec-theme';
+  const targetTab = activeTabRaw.startsWith('sec-') ? activeTabRaw : `sec-${activeTabRaw}`;
   // frame=1 makes Vite proxy this to the backend's standalone settings.html,
   // avoiding a recursive load of the React app inside the modal.
   const iframeUrl = `/settings?frame=1#${targetTab}`;
 
   const handleBackToChat = () => {
-    if (window.location.pathname === '/settings' || window.location.hash.includes('settings')) {
+    if (window.location.pathname === '/settings' || window.location.hash.includes('settings') || window.location.hash.startsWith('#sec-')) {
       try {
         window.history.pushState({}, '', '/');
       } catch (_) {}

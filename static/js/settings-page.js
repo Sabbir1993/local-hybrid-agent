@@ -16,8 +16,25 @@ function switchSettingsTab(tabId, updateHash = true) {
 
   localStorage.setItem('a770_active_settings_tab', tabId);
   if (updateHash) {
+    let reportedTab = tabId;
+    if (tabId === 'sec-caps') {
+      try {
+        const sub = window._capTab || localStorage.getItem('a770_active_cap_tab');
+        if (sub) reportedTab = 'sec-caps/' + sub;
+      } catch (_) {}
+    }
     try {
-      history.replaceState(null, '', '#' + tabId);
+      history.replaceState(null, '', '#' + reportedTab);
+    } catch (_) {}
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'settings-tab-change', tab: reportedTab }, '*');
+      }
+    } catch (_) {}
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.history.replaceState(null, '', window.parent.location.pathname + '#' + reportedTab);
+      }
     } catch (_) {}
   }
 
@@ -34,6 +51,10 @@ function switchSettingsTab(tabId, updateHash = true) {
 
   if (tabId === 'sec-gpus' && typeof triggerGpuQuery === 'function') {
     triggerGpuQuery();
+  }
+
+  if (tabId === 'sec-profile' && typeof window.populateAccountPanels === 'function') {
+    window.populateAccountPanels();
   }
 }
 window.switchSettingsTab = switchSettingsTab;
@@ -93,9 +114,43 @@ if (searchInput) {
 window.addEventListener('hashchange', () => {
   const hash = location.hash ? location.hash.replace(/^#/, '') : '';
   if (hash) {
-    const targetId = hash.startsWith('sec-') ? hash : ('sec-' + hash);
+    let targetId = hash;
+    let subTab = '';
+    if (targetId.includes('/') || targetId.includes(':')) {
+      const parts = targetId.split(/[\/:]/);
+      targetId = parts[0];
+      subTab = parts[1];
+    }
+    if (!targetId.startsWith('sec-') && document.getElementById('sec-' + targetId)) {
+      targetId = 'sec-' + targetId;
+    }
     if (document.getElementById(targetId)) {
       switchSettingsTab(targetId, false);
+    }
+    if (targetId === 'sec-caps' && subTab && typeof window._capShowTab === 'function') {
+      window._capShowTab(subTab, false);
+    }
+  }
+});
+
+// React host can tell the iframe to switch tabs on browser back/forward or external actions
+window.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'navigate-tab' && e.data.tab) {
+    let targetId = e.data.tab;
+    let subTab = '';
+    if (targetId.includes('/') || targetId.includes(':')) {
+      const parts = targetId.split(/[\/:]/);
+      targetId = parts[0];
+      subTab = parts[1];
+    }
+    if (!targetId.startsWith('sec-') && document.getElementById('sec-' + targetId)) {
+      targetId = 'sec-' + targetId;
+    }
+    if (targetId && document.getElementById(targetId)) {
+      switchSettingsTab(targetId, false);
+    }
+    if (targetId === 'sec-caps' && subTab && typeof window._capShowTab === 'function') {
+      window._capShowTab(subTab, false);
     }
   }
 });
@@ -152,7 +207,19 @@ window.__sessionReady.then((data) => {
   cleanupEmptyNavGroups();
 
   // Determine initial tab from hash or localStorage or default to sec-theme
-  let targetTab = location.hash ? location.hash.replace(/^#/, '') : localStorage.getItem('a770_active_settings_tab');
+  let rawHash = '';
+  try {
+    rawHash = (location.hash || (window.parent && window.parent.location.hash) || '').replace(/^#/, '');
+  } catch (_) {
+    rawHash = location.hash ? location.hash.replace(/^#/, '') : '';
+  }
+  let targetTab = rawHash;
+  if (targetTab.includes('/') || targetTab.includes(':')) {
+    targetTab = targetTab.split(/[\/:]/)[0];
+  }
+  if (!targetTab) {
+    targetTab = localStorage.getItem('a770_active_settings_tab') || 'sec-theme';
+  }
   if (targetTab && !targetTab.startsWith('sec-') && document.getElementById('sec-' + targetTab)) {
     targetTab = 'sec-' + targetTab;
   }
@@ -576,8 +643,8 @@ window.initSubagentsPanel = initSubagentsPanel;
 })();
 
 // Account panels: profile readout and password change (moved out of the user menu).
-(function initAccountPanels() {
-  const u = window.__user || {};
+function populateAccountPanels(u) {
+  u = u || window.__user || {};
   const fill = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
   fill('prof-display-name', u.display_name || u.username);
   fill('prof-email', u.email || u.username);
@@ -590,12 +657,48 @@ window.initSubagentsPanel = initSubagentsPanel;
   if (role) role.textContent = (u.role_names || []).join(', ') || (u.is_super_admin ? 'Super admin' : 'User');
   const avatar = document.getElementById('prof-avatar');
   if (avatar) {
-    if (u.image) avatar.innerHTML = '<img src="' + u.image + '" alt="Avatar">';
-    else avatar.textContent = ((u.display_name || u.email || 'SH').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase());
+    if (u.image) {
+      avatar.innerHTML = '<img src="' + u.image + '" alt="Avatar">';
+    } else {
+      const raw = u.display_name || u.email || u.username || 'U';
+      const initials = raw.split(/[\s._-]+/).filter(Boolean).map(w => w[0]).join('').slice(0, 2).toUpperCase() || 'U';
+      avatar.textContent = initials;
+    }
   }
+}
+window.populateAccountPanels = populateAccountPanels;
 
+(function initAccountPanels() {
+  let imageData = (window.__user && window.__user.image) || '';
+  if (window.__user) populateAccountPanels(window.__user);
+
+  if (window.__sessionReady) {
+    window.__sessionReady.then((data) => {
+      if (data && data.user) {
+        if (!imageData && data.user.image) imageData = data.user.image;
+        populateAccountPanels(data.user);
+      }
+    });
+  }
+  document.addEventListener('session-ready', (e) => {
+    if (e.detail && e.detail.user) {
+      if (!imageData && e.detail.user.image) imageData = e.detail.user.image;
+      populateAccountPanels(e.detail.user);
+    }
+  });
+
+  // Fallback explicit fetch to guarantee profile loads even if session-ready already resolved
+  fetch('/auth/me').then(r => r.ok ? r.json() : null).then(d => {
+    if (d && d.user) {
+      if (d.roles) d.user.role_names = d.roles;
+      window.__user = Object.assign(window.__user || {}, d.user);
+      if (!imageData && d.user.image) imageData = d.user.image;
+      populateAccountPanels(d.user);
+    }
+  }).catch(() => {});
+
+  const avatar = document.getElementById('prof-avatar');
   const imageFile = document.getElementById('prof-image-file');
-  let imageData = u.image || '';
   if (imageFile) imageFile.onchange = () => {
     const f = imageFile.files && imageFile.files[0];
     if (!f) return;
@@ -626,7 +729,16 @@ window.initSubagentsPanel = initSubagentsPanel;
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
-      if (status) { status.textContent = 'Profile saved.'; status.style.color = ''; }
+      if (status) { status.textContent = 'Profile saved.'; status.style.color = 'var(--green)'; }
+      if (d.user) {
+        window.__user = Object.assign(window.__user || {}, d.user);
+        populateAccountPanels(window.__user);
+      }
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: 'profile-updated', user: d.user }, '*');
+        }
+      } catch (_) {}
     } catch (e) {
       if (status) { status.textContent = e.message; status.style.color = '#f43f5e'; }
     } finally { profileBtn.disabled = false; }

@@ -34,7 +34,20 @@ async function loadCapabilities() {
   try {
     const d = await (await fetch('/control/capabilities')).json();
     if (d.error) { box.innerHTML = '<div class="mon-empty">' + esc(d.error) + '</div>'; return; }
-    let _capActiveTab = window._capTab || (canMemory ? 'memory' : 'web');
+    let subTabFromHash = '';
+    try {
+      const curHash = (location.hash || (window.parent && window.parent.location.hash) || '').replace(/^#/, '');
+      if (curHash.startsWith('sec-caps/') || curHash.startsWith('sec-caps:')) {
+        subTabFromHash = curHash.split(/[\/:]/)[1];
+      } else if (curHash && !curHash.startsWith('sec-')) {
+        subTabFromHash = curHash;
+      }
+    } catch (_) {}
+    let savedCapTab = '';
+    try {
+      savedCapTab = localStorage.getItem('a770_active_cap_tab') || '';
+    } catch (_) {}
+    let _capActiveTab = subTabFromHash || window._capTab || savedCapTab || (canMemory ? 'memory' : 'web');
     const tabBtn = (id, label, enabled) => {
       let badge = '';
       if (enabled === true) badge = `<span class="cap-pill-badge on">ON</span>`;
@@ -273,16 +286,19 @@ async function loadCapabilities() {
             </div>`).join('') || '<div class="dim" style="font-size:11.5px; padding:6px 0;">(no global patterns configured)</div>'}
         </div>
         ${canConfigureGlobal ? `
-        <div style="display:flex; gap:8px; margin-top:10px;">
-          <input type="text" id="shell-pat-new" placeholder="e.g. git * or npx skills * or *" style="flex:1; height:32px; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:0 10px; font-size:12px; font-family:'JetBrains Mono', monospace; box-sizing:border-box;">
-          <button class="btn ghost" id="shell-pat-add" style="height:32px; margin:0; padding:0 14px; font-size:12px; font-weight:600; border-radius:6px;">+ Add</button>
+        <div style="display:flex; gap:10px; margin-top:12px; align-items:center;">
+          <input type="text" id="shell-pat-new" placeholder="e.g. git * or npx skills * or *" style="flex:1; height:34px; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:0 12px; font-size:12px; font-family:'JetBrains Mono', monospace; box-sizing:border-box;">
+          <button class="btn secondary" id="shell-pat-add" style="height:34px; margin:0; padding:0 16px; font-size:12px; font-weight:600; border-radius:6px; border:1px solid var(--border); background:var(--panel); color:var(--text); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; white-space:nowrap;">+ Add</button>
         </div>
-        <button class="btn accent" id="shell-pats-save" style="margin-top:12px; height:34px; padding:0 16px; font-size:12px; font-weight:600; border-radius:6px;">💾 Save patterns</button>
-        ` : `<p class="dim" style="font-size:11px; margin:8px 0 0;">Only an admin can edit the global list. Use the shell permission prompt's "Always allow for me" to add your own.</p>`}
-        <div style="margin-top:14px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.06);">
+        <div style="display:flex; align-items:center; gap:12px; margin-top:14px; margin-bottom:18px;">
+          <button class="btn accent" id="shell-pats-save" style="height:34px; margin:0; padding:0 18px; font-size:12px; font-weight:600; border-radius:6px; display:inline-flex; align-items:center; gap:6px; cursor:pointer;">💾 Save patterns</button>
+          <span class="dim" style="font-size:11.5px;">Changes apply immediately to all shell execution sessions.</span>
+        </div>
+        ` : `<p class="dim" style="font-size:11.5px; margin:12px 0 16px;">Only an admin can edit the global list. Use the shell permission prompt's "Always allow for me" to add your own.</p>`}
+        <div style="margin-top:18px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.08);">
           <div style="font-weight:600; font-size:12.5px; color:var(--text);">Allowed for me</div>
-          <div class="dim" style="font-size:11px; margin-top:2px;">Commands you chose to always allow for your account only</div>
-          <div id="shell-my-pats" class="dim" style="font-size:11.5px; margin-top:6px;">Loading...</div>
+          <div class="dim" style="font-size:11px; margin-top:3px;">Commands you chose to always allow for your account only</div>
+          <div id="shell-my-pats" class="dim" style="font-size:11.5px; margin-top:8px;">Loading...</div>
         </div>
       </div>`;
     h += capSection('shell', '⌨️ Shell Execution', sh.enabled, shellInner,
@@ -349,8 +365,25 @@ async function loadCapabilities() {
     h += '</div></div>';
     box.innerHTML = h;
 
-    const _capShowTab = (tab) => {
+    const _capShowTab = (tab, updateUrl = true) => {
       window._capTab = tab;
+      try {
+        localStorage.setItem('a770_active_cap_tab', tab);
+      } catch (_) {}
+      if (updateUrl) {
+        const fullHash = 'sec-caps/' + tab;
+        try { history.replaceState(null, '', '#' + fullHash); } catch (_) {}
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'settings-tab-change', tab: fullHash }, '*');
+          }
+        } catch (_) {}
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.history.replaceState(null, '', window.parent.location.pathname + '#' + fullHash);
+          }
+        } catch (_) {}
+      }
       box.querySelectorAll('.cap-tab').forEach(b => {
         const on = b.dataset.tab === tab;
         b.classList.toggle('on', on);
@@ -360,6 +393,7 @@ async function loadCapabilities() {
         p.style.display = p.dataset.pane === tab ? '' : 'none';
       });
     };
+    window._capShowTab = _capShowTab;
     box.querySelectorAll('.cap-tab').forEach(b => {
       b.onclick = () => _capShowTab(b.dataset.tab);
     });
@@ -368,7 +402,7 @@ async function loadCapabilities() {
       const first = box.querySelector('.cap-tab');
       _capActiveTab = first ? first.dataset.tab : '';
     }
-    _capShowTab(_capActiveTab);
+    _capShowTab(_capActiveTab, false);
 
     capHelpAttach(box);
     if (limits) wireAgentLimits(box);
@@ -524,9 +558,9 @@ async function loadCapabilities() {
       const wrap = box.querySelector('#shell-pats');
       const i = wrap.querySelectorAll('.shell-pat').length;
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex; gap:5px; align-items:center;';
-      row.innerHTML = `<input type="text" class="shell-pat" value="${esc(newPat.value.trim())}" style="flex:1; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px; font-family:monospace;">
-        <button class="btn ghost shell-pat-del" style="width:auto; margin:0; padding:2px 7px; font-size:10px; color:var(--red);">✕</button>`;
+      row.style.cssText = 'display:flex; gap:8px; align-items:center;';
+      row.innerHTML = `<input type="text" class="shell-pat" value="${esc(newPat.value.trim())}" style="flex:1; height:32px; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:0 10px; font-size:12px; font-family:'JetBrains Mono', monospace; box-sizing:border-box;">
+        <button class="btn ghost shell-pat-del" style="width:32px; height:32px; margin:0; padding:0; display:flex; align-items:center; justify-content:center; border-radius:6px; color:var(--red);" title="Remove pattern">✕</button>`;
       wrap.appendChild(row);
       newPat.value = '';
       wirePatDel(row.querySelector('.shell-pat-del'));

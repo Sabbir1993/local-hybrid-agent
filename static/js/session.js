@@ -349,6 +349,7 @@
     if (data.idle_seconds) idleMs = data.idle_seconds * 1000;
     // admin can turn idle sign-out off (Settings > Session security); the server then keeps the session to its absolute cap
     if (data.user && data.idle_enabled !== false) startIdleWatch();
+    if (data.user && data.roles) data.user.role_names = data.roles;
     window.__user = data.user;
     window.__perms = new Set(data.permissions || []);
     applyPermGating(data);

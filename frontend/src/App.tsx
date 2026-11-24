@@ -169,10 +169,20 @@ export function App() {
   useEffect(() => {
     const handleUrlChange = () => {
       const p = window.location.pathname.toLowerCase();
-      const h = window.location.hash.toLowerCase();
-      if (p === '/settings' || h === '#settings' || h.startsWith('#/settings') || h.startsWith('#sec-')) {
+      const h = window.location.hash;
+      const hLower = h.toLowerCase();
+      if (p === '/settings' || hLower === '#settings' || hLower.startsWith('#/settings') || hLower.startsWith('#sec-')) {
+        let tabPart = '';
+        if (h.startsWith('#sec-')) {
+          tabPart = h.replace(/^#/, '');
+        } else if (h.includes('#/settings/')) {
+          tabPart = h.split('#/settings/')[1];
+        }
+        if (tabPart) {
+          useAppStore.getState().setSettingsTab(tabPart);
+        }
         setActiveModal('settings');
-      } else if (p === '/report' || h === '#report' || h.startsWith('#/report')) {
+      } else if (p === '/report' || hLower === '#report' || hLower.startsWith('#/report')) {
         setActiveModal('report');
       } else if (p === '/audit' || h === '#audit' || h.startsWith('#/audit')) {
         setActiveModal('audit');

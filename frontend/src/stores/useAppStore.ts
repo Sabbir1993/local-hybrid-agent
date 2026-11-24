@@ -240,6 +240,7 @@ interface AppState {
   // Modals & Panels
   activeModal: ActiveModal;
   settingsTab: string;
+  setSettingsTab: (settingsTab: string) => void;
   customizeTab: 'skills' | 'connectors' | 'plugins' | 'agents';
   previewModal: PreviewModalState;
   openPreviewModal: (filePath: string, title?: string, directContent?: string | null, source?: 'common' | 'ws' | 'modal', forceModal?: boolean) => void;
@@ -1978,8 +1979,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveModal: (activeModal) => {
     if (activeModal === 'settings') {
       try {
-        if (window.location.pathname !== '/settings' && !window.location.hash.includes('settings')) {
-          window.history.pushState({ modal: 'settings' }, '', '/settings');
+        if (window.location.pathname !== '/settings' && !window.location.hash.includes('settings') && !window.location.hash.startsWith('#sec-')) {
+          const tab = get().settingsTab || (typeof localStorage !== 'undefined' ? localStorage.getItem('a770_active_settings_tab') : '') || 'sec-theme';
+          const target = tab.startsWith('sec-') ? tab : `sec-${tab}`;
+          window.history.pushState({ modal: 'settings' }, '', `/settings#${target}`);
         }
       } catch (_) {}
     } else if (activeModal === 'report') {
@@ -2014,6 +2017,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       window.history.pushState({ modal: 'settings' }, '', `/settings#${settingsTab}`);
     } catch (_) {}
     set({ activeModal: 'settings', settingsTab });
+  },
+  setSettingsTab: (settingsTab: string) => {
+    set({ settingsTab });
   },
   openProfileModal: () => {
     set({ activeModal: 'profile' });
