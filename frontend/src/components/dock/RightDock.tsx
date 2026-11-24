@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Code2, Globe, ListChecks, ListTodo, Terminal, Users } from 'lucide-react';
 import { useAppStore, type DockTab } from '../../stores/useAppStore';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
@@ -26,14 +26,67 @@ export const RightDock: React.FC = () => {
   const subagentsCount = Object.keys(activeSubagents || {}).length;
 
   // Preview tab states
-  const [previewMode, setPreviewMode] = useState<'preview' | 'code'>('preview');
-  const [isMobileView, setIsMobileView] = useState(false);
   const [previewText, setPreviewText] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const [browserUrl, setBrowserUrl] = useState('');
-  const [browserInput, setBrowserInput] = useState('');
+  type BrowserTab = { id: number; url: string; input: string; title: string; reloadKey: number };
+  const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([{ id: 1, url: '', input: '', title: 'New tab', reloadKey: 0 }]);
+  const [activeBrowserTab, setActiveBrowserTab] = useState(1);
+  const webviewRefs = useRef<Record<number, any>>({});
+  const tabSeq = useRef(1);
 
   const isLocalPreviewUrl = (u: string) => /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])([: /]|$)/i.test(u);
+  const activeTab = browserTabs.find((t) => t.id === activeBrowserTab) || browserTabs[0];
+  const browserUrl = activeTab?.url || '';
+  const browserInput = activeTab?.input || '';
+
+  const patchTab = (id: number, patch: Partial<BrowserTab>) =>
+    setBrowserTabs((tabs) => tabs.map((t) => t.id === id ? { ...t, ...patch } : t));
+
+  const navigateTab = (raw: string, id = activeBrowserTab) => {
+    let u = raw.trim();
+    if (!u) return;
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) u = 'http://' + u;
+    if (/^https?:\/\//i.test(u) || /^\/(agent|assets|static)\//i.test(u)) {
+      let title = u;
+      try { title = new URL(u, window.location.origin).hostname || u; } catch (_) {}
+      patchTab(id, { url: u, input: u, title });
+    }
+  };
+
+  const addBrowserTab = () => {
+    const id = ++tabSeq.current;
+    setBrowserTabs((tabs) => [...tabs, { id, url: '', input: '', title: 'New tab', reloadKey: 0 }]);
+    setActiveBrowserTab(id);
+  };
+
+  const closeBrowserTab = (id: number) => {
+    setBrowserTabs((tabs) => {
+      const next = tabs.filter((t) => t.id !== id);
+      if (!next.length) {
+        const fresh = { id: ++tabSeq.current, url: '', input: '', title: 'New tab', reloadKey: 0 };
+        setActiveBrowserTab(fresh.id);
+        return [fresh];
+      }
+      if (id === activeBrowserTab) setActiveBrowserTab(next[Math.max(0, tabs.findIndex((t) => t.id === id) - 1)].id);
+      return next;
+    });
+  };
+
+  const browserBack = () => {
+    const wv = webviewRefs.current[activeBrowserTab];
+    if (wv && typeof wv.goBack === 'function') { wv.goBack(); return; }
+    try { (document.getElementById('prev-dock-iframe') as HTMLIFrameElement | null)?.contentWindow?.history.back(); } catch (_) {}
+  };
+  const browserForward = () => {
+    const wv = webviewRefs.current[activeBrowserTab];
+    if (wv && typeof wv.goForward === 'function') { wv.goForward(); return; }
+    try { (document.getElementById('prev-dock-iframe') as HTMLIFrameElement | null)?.contentWindow?.history.forward(); } catch (_) {}
+  };
+  const browserReload = () => {
+    const wv = webviewRefs.current[activeBrowserTab];
+    if (wv && typeof wv.reload === 'function') wv.reload();
+    patchTab(activeBrowserTab, { reloadKey: (activeTab?.reloadKey || 0) + 1 });
+  };
 
   // Resize right dock width state & drag handler
   const [dockWidth, setDockWidth] = useState<number>(() => {
@@ -106,9 +159,8 @@ export const RightDock: React.FC = () => {
       : `/agent/raw?path=${enc}`;
 
   useEffect(() => {
-    setBrowserUrl('');
-    setBrowserInput(rawUrl || '');
-  }, [filePath]);
+    if (filePath && rawUrl) navigateTab(rawUrl);
+  }, [filePath, rawUrl]);
 
   useEffect(() => {
     if (!filePath && !previewModal?.directContent) {
@@ -295,110 +347,39 @@ export const RightDock: React.FC = () => {
 
       {/* Dock View: Preview (Interactive side tab matching claude-dock.js) */}
       <div className={`dock-view-body ${dockTab === 'preview' ? 'active' : ''}`} id="dock-view-preview" style={{ display: dockTab === 'preview' ? 'flex' : 'none', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        <div className="pv-tabstrip">
+          {browserTabs.map((tab) => (
+            <div key={tab.id} className={`pv-tab${tab.id === activeBrowserTab ? ' active' : ''}`}
+                 onClick={() => setActiveBrowserTab(tab.id)} title={tab.url || 'New tab'}>
+              <span className="pv-tab-title">{tab.title || 'New tab'}</span>
+              <span className="pv-tab-close" title="Close tab" onClick={(e) => { e.stopPropagation(); closeBrowserTab(tab.id); }}>×</span>
+            </div>
+          ))}
+          <button type="button" className="pv-tab-add" title="New tab" onClick={addBrowserTab}>+</button>
+        </div>
         <div className="pv-browser-bar">
-          <button type="button" className="pv-nav-btn" title="Back" onClick={() => {
-            const f = document.getElementById('prev-dock-iframe') as HTMLIFrameElement | null;
-            try { f?.contentWindow?.history.back(); } catch (_) {}
-          }}>←</button>
-          <button type="button" className="pv-nav-btn" title="Forward" onClick={() => {
-            const f = document.getElementById('prev-dock-iframe') as HTMLIFrameElement | null;
-            try { f?.contentWindow?.history.forward(); } catch (_) {}
-          }}>→</button>
-          <button type="button" className="pv-nav-btn" title="Reload" onClick={() => setReloadKey((k) => k + 1)}>⟳</button>
+          <button type="button" className="pv-nav-btn" title="Back" onClick={browserBack}>←</button>
+          <button type="button" className="pv-nav-btn" title="Forward" onClick={browserForward}>→</button>
+          <button type="button" className="pv-nav-btn" title="Reload" onClick={browserReload}>⟳</button>
           <input
             className="pv-address"
             aria-label="Address"
             spellCheck={false}
-            placeholder="Enter a URL or open a file preview"
+            placeholder="Search or enter a URL"
             value={browserInput}
-            onChange={(e) => setBrowserInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter') return;
-              let u = browserInput.trim();
-              if (!u) return;
-              if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) u = 'http://' + u;
-              if (/^https?:\/\//i.test(u)) {
-                setBrowserUrl(u);
-                setPreviewMode('preview');
-              }
-            }}
+            onChange={(e) => patchTab(activeBrowserTab, { input: e.target.value })}
+            onKeyDown={(e) => { if (e.key === 'Enter') navigateTab(browserInput); }}
           />
-          <a className="pv-nav-btn" title="Open in new tab" target="_blank" rel="noopener noreferrer"
-             href={browserUrl || rawUrl || 'about:blank'}>↗</a>
+          <a className="pv-nav-btn" title="Open in system browser" target="_blank" rel="noopener noreferrer"
+             href={browserUrl || 'about:blank'}>↗</a>
         </div>
         {filePath || previewModal?.directContent || browserUrl ? (
           <>
-            <div className="preview-tab-controls">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                <b style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }} title={previewModal.title || filePath}>
-                  {previewModal.title || filePath}
-                </b>
-                <span className="chip mono" style={{ fontSize: '10px', padding: '1px 6px', background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: '4px' }}>
-                  .{ext}
-                </span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                {(isHtml || !isImage) && (
-                  <div className="preview-toggle-btns">
-                    <button
-                      type="button"
-                      className={`preview-toggle-btn ${previewMode === 'preview' ? 'active' : ''}`}
-                      id="btn-prev-tab-view"
-                      onClick={() => setPreviewMode('preview')}
-                    >
-                      Preview
-                    </button>
-                    <button
-                      type="button"
-                      className={`preview-toggle-btn ${previewMode === 'code' ? 'active' : ''}`}
-                      id="btn-prev-tab-code"
-                      onClick={() => setPreviewMode('code')}
-                    >
-                      Code
-                    </button>
-                  </div>
-                )}
-                {isHtml && (
-                  <button
-                    type="button"
-                    className="dock-icon-btn"
-                    id="btn-prev-mobile"
-                    title="Toggle Mobile / Desktop view"
-                    onClick={() => setIsMobileView(!isMobileView)}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
-                  >
-                    📱
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="dock-icon-btn"
-                  id="btn-prev-reload"
-                  title="Reload preview"
-                  onClick={() => setReloadKey((k) => k + 1)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
-                >
-                  ⟳
-                </button>
-                {rawUrl && (
-                  <a
-                    href={rawUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="dock-icon-btn"
-                    title="Open in new tab"
-                    style={{ textDecoration: 'none', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
-                  >
-                    ↗
-                  </a>
-                )}
-              </div>
-            </div>
-
             <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               {browserUrl && !isLocalPreviewUrl(browserUrl) ? (
                 React.createElement('webview' as any, {
-                  key: `webview-${browserUrl}`,
+                  key: `webview-${activeTab.id}`,
+                  ref: (el: any) => { webviewRefs.current[activeTab.id] = el; },
                   src: browserUrl,
                   allowpopups: 'false',
                   nodeintegration: 'false',
@@ -415,36 +396,27 @@ export const RightDock: React.FC = () => {
                   />
                 </div>
               ) : isHtml ? (
-                <>
-                  <div
-                    className={`preview-iframe-wrapper ${isMobileView ? 'mobile-frame' : ''}`}
-                    id="prev-frame-wrap"
-                    style={{ display: previewMode === 'preview' ? 'flex' : 'none', flex: 1, width: '100%', height: '100%' }}
-                  >
-                    <iframe
-                      id="prev-dock-iframe"
-                      key={reloadKey}
-                      className="preview-live-iframe"
-                      sandbox="allow-scripts allow-forms allow-popups allow-modals"
-                      src={previewModal.directContent ? undefined : (browserUrl || rawUrl)}
-                      srcDoc={previewModal.directContent || undefined}
-                      style={{
-                        width: '100%',
-                        height: '100%',
-                        border: 'none',
-                        background: '#ffffff',
-                        pointerEvents: isDragging ? 'none' : 'auto',
-                      }}
-                    />
-                  </div>
-                  <pre
-                    className="preview-code-view"
-                    id="prev-code-wrap"
-                    style={{ display: previewMode === 'code' ? 'block' : 'none', flex: 1, margin: 0, overflow: 'auto' }}
-                  >
-                    {previewText || previewModal.directContent || ''}
-                  </pre>
-                </>
+                <div
+                  className="preview-iframe-wrapper"
+                  id="prev-frame-wrap"
+                  style={{ flex: 1, width: '100%', height: '100%' }}
+                >
+                  <iframe
+                    id="prev-dock-iframe"
+                    key={`${activeTab.id}-${activeTab.reloadKey}`}
+                    className="preview-live-iframe"
+                    sandbox="allow-scripts allow-forms allow-popups allow-modals"
+                    src={previewModal.directContent ? undefined : (browserUrl || rawUrl)}
+                    srcDoc={previewModal.directContent || undefined}
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      border: 'none',
+                      background: '#ffffff',
+                      pointerEvents: isDragging ? 'none' : 'auto',
+                    }}
+                  />
+                </div>
               ) : (
                 <pre
                   className="preview-code-view"

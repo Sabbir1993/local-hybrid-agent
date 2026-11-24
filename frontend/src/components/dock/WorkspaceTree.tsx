@@ -186,6 +186,7 @@ export const WorkspaceTree: React.FC = () => {
   const [changes, setChanges] = useState<WsChange[]>([]);
   const [changesOpen, setChangesOpen] = useState(false);
   const [file, setFile] = useState<WsFile | null>(null);
+  const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [fileError, setFileError] = useState('');
   // Folder creation: the server only supports mkdir (via the user's companion); parent is a root-relative path.
   const [mkParent, setMkParent] = useState<string | null>(null);
@@ -205,7 +206,8 @@ export const WorkspaceTree: React.FC = () => {
   const scopeKey = inAgent ? `agent:${agentId}:${agentDir}` : `project:${activeProjectId}`;
 
   useEffect(() => {
-    setFile(null);   // a file of the previous folder must not stay on screen
+    setFile(null);
+    setOpenTabs([]);   // a file of the previous folder must not stay on screen
     setChanges([]);
     setRoot('');
   }, [scopeKey]);
@@ -273,9 +275,18 @@ export const WorkspaceTree: React.FC = () => {
         return;
       }
       setFile({ path, content: d.content || '', changed: d.changed, status: d.status, diff: d.diff });
+      setOpenTabs((tabs) => tabs.includes(path) ? tabs : [...tabs, path]);
     } catch (e: any) {
       setFileError('File view failed: ' + (e?.message || 'network error'));
     }
+  };
+
+  const closeTab = (path: string) => {
+    const next = openTabs.filter((p) => p !== path);
+    setOpenTabs(next);
+    if (file?.path !== path) return;
+    if (next.length) void openFile(next[Math.max(0, openTabs.indexOf(path) - 1)] || next[0]);
+    else setFile(null);
   };
 
   if (problem) {
@@ -302,7 +313,30 @@ export const WorkspaceTree: React.FC = () => {
           >
             ← Files
           </button>
-          <div className="ws-tab"><FileIcon name={file.path} /><span>{file.path.split('/').pop()}</span><span className="ws-tab-x" onClick={() => setFile(null)} title="Close file">×</span></div>
+          <div className="ws-tab-strip">
+            {openTabs.map((path) => (
+              <div
+                key={path}
+                role="button"
+                tabIndex={0}
+                className={`ws-tab${file.path === path ? ' active' : ''}`}
+                title={path}
+                onClick={() => { if (file.path !== path) void openFile(path); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (file.path !== path) void openFile(path); } }}
+              >
+                <FileIcon name={path} />
+                <span>{path.split(/[\\/]/).pop()}</span>
+                <span
+                  className="ws-tab-x"
+                  role="button"
+                  tabIndex={0}
+                  title="Close file"
+                  onClick={(e) => { e.stopPropagation(); closeTab(path); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); closeTab(path); } }}
+                >×</span>
+              </div>
+            ))}
+          </div>
           <div id="ws-file-path" className="ws-breadcrumb" title={file.path}>
             {file.path.split(/[\\/]/).map((part, i, arr) => <React.Fragment key={i}><span>{part}</span>{i < arr.length - 1 ? <span className="ws-sep">›</span> : null}</React.Fragment>)}
           </div>
@@ -347,10 +381,10 @@ export const WorkspaceTree: React.FC = () => {
       <header className="code-head">
         <div className="code-head-row">
           <span className="code-head-label">Workspace</span>
-          <span className="code-head-count">{changes.length}<span> changed</span></span>
-        </div>
-        <div id="ws-root-path" className="mono" title="Workspace root directory on disk">
-          {root || (inAgent ? agentDir : project?.path) || ''}
+          <div className="code-head-meta">
+            <span className="code-head-count">{changes.length}<span> changed</span></span>
+            {(inAgent && activeCustomAgent?.name) ? <span className="code-scope-chip">{activeCustomAgent.name}</span> : null}
+          </div>
         </div>
       </header>
       {changes.length > 0 && (
@@ -371,7 +405,7 @@ export const WorkspaceTree: React.FC = () => {
           )}
         </div>
       )}
-      <div id="ws-filter-bar" style={{ display: 'flex', gap: 4, padding: '0 8px 8px' }}>
+      <div id="ws-filter-bar">
         <input
           type="text"
           id="ws-filter"
@@ -379,14 +413,14 @@ export const WorkspaceTree: React.FC = () => {
           title="Filter tree by name"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          style={{ flex: 1, padding: '4px 8px', fontSize: 11, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: 'inherit' }}
         />
-        <button className="btn ghost" id="ws-refresh" title="Refresh file tree" onClick={() => setReloadKey((k) => k + 1)} style={{ width: 'auto', margin: 0, padding: '3px 8px', fontSize: 11 }}>
-          ⟳
-        </button>
-        <button className="btn ghost" id="ws-new" title="New folder in workspace root" onClick={() => startMkdir('')} style={{ width: 'auto', margin: 0, padding: '3px 8px', fontSize: 11 }}>
-          +
-        </button>
+        <button className="btn ghost" id="ws-refresh" title="Refresh file tree" onClick={() => setReloadKey((k) => k + 1)}>⟳</button>
+        <button className="btn ghost" id="ws-new" title="New folder in workspace root" onClick={() => startMkdir('')}>+</button>
+      </div>
+      <div className="ws-root-row" title={root || ''}>
+        <span className="ws-root-caret" aria-hidden="true">⌄</span>
+        <FolderOpen size={14} className="ws-dir-icon" aria-hidden="true" />
+        <span>{root || 'workspace'}</span>
       </div>
       {mkParent !== null && (
         <div style={{ display: 'flex', gap: 4, padding: '0 8px 8px' }}>

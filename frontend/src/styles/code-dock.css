@@ -3,14 +3,17 @@
 #ws-tree-view { padding-top: 14px; }
 
 .code-head {
+  display: block;
+  width: 100%;
   padding: 0 12px 12px;
   border-bottom: 1px solid var(--border-subtle);
 }
 .code-head-row {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
+  width: 100%;
 }
 .code-head-label { font-size: 14px; font-weight: 600; color: var(--text); }
 .code-head-count {
@@ -19,14 +22,6 @@
   color: var(--accent);
 }
 .code-head-count span { color: var(--dim); }
-
-#ws-root-path {
-  margin-top: 8px;
-  font-size: 10.5px;
-  line-height: 1.5;
-  color: var(--dim);
-  overflow-wrap: anywhere;
-}
 
 #ws-changes { padding: 12px 8px 0; }
 .ws-changes-head {
@@ -66,8 +61,42 @@
   box-shadow: 0 0 0 3px var(--accent-bg);
 }
 
+.code-head-meta { display: flex; align-items: center; gap: 8px; margin-left: auto; min-width: 0; }
+.code-scope-chip {
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 3px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--panel2);
+  font-size: 10.5px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+#ws-filter-bar { display: flex; align-items: center; gap: 5px; padding: 0 8px 8px; }
+#ws-filter-bar input {
+  flex: 1; min-width: 0; padding: 5px 9px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg); color: var(--text); font-size: 11px;
+}
+#ws-filter-bar input:focus { outline: none; border-color: var(--accent); }
+#ws-filter-bar button {
+  width: auto; margin: 0; padding: 3px 8px; font-size: 11px; flex: 0 0 auto;
+}
+
+.ws-root-row {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 8px; margin: 0 4px 2px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 11.5px; font-weight: 600; color: var(--text);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.ws-root-caret { width: 9px; color: var(--dim); font-size: 11px; }
+
 /* VS Code-like tree + editor */
-#ws-tree { padding: 6px 0 10px; }
+#ws-tree { padding: 4px 4px 10px; }
 #ws-tree .ws-node {
   display: flex;
   align-items: center;
@@ -100,20 +129,31 @@
   padding: 4px 8px;
   border-bottom: 1px solid var(--border-subtle);
 }
+.ws-tab-strip { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.ws-tab-strip::-webkit-scrollbar { display: none; }
 .ws-tab {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 4px 6px 4px 9px;
-  border: 1px solid var(--border-subtle);
-  border-bottom-color: transparent;
+  border: 1px solid transparent;
   border-radius: 6px 6px 0 0;
-  background: var(--panel2);
+  background: transparent;
   font-size: 11.5px;
-  color: var(--text);
+  color: var(--dim);
   white-space: nowrap;
+  cursor: pointer;
+  flex: 0 0 auto;
 }
-.ws-tab-x { margin-left: 4px; color: var(--dim); cursor: pointer; }
+.ws-tab:hover { background: color-mix(in srgb, var(--text) 5%, transparent); color: var(--text); }
+.ws-tab.active {
+  border-color: var(--border-subtle);
+  border-bottom-color: transparent;
+  background: var(--panel2);
+  color: var(--text);
+}
+.ws-tab-x { margin-left: 4px; color: var(--dim); cursor: pointer; padding: 0 2px; }
+.ws-tab-x:hover { color: var(--red); }
 .ws-breadcrumb { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: 10px; color: var(--dim); }
 .ws-breadcrumb > span { overflow: hidden; text-overflow: ellipsis; }
 .ws-breadcrumb .ws-sep { flex: 0 0 auto; opacity: 0.6; }
