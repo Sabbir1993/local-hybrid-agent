@@ -273,12 +273,23 @@ DESIGNER_NOTE = ("Designer style: the slides are pictures, so their text cannot 
 
 
 def _layout_note(ext: str, data: bytes, markdown: str = "") -> str:
-    """Layout check of a finished .pptx (text that overflows, low contrast, shapes off the slide...) as one sentence
-    for the tool result; '' when clean, not a deck, or the check itself failed (it must never block a build)."""
+    """Layout check of a finished document (.pptx, .xlsx, .docx, .pdf) for errors,
+    overflows, or unrendered placeholders as a concise notice for the agent result."""
     if ext == ".xlsx":
         try:
+            from ..doc_qa.xlsx_lint import lint_xlsx
+            findings = lint_xlsx(data)
+            qa_note = f" [QA Notice: {len(findings)} issue(s): {'; '.join(findings[:2])}]" if findings else ""
             from ..sheet_engine import build as sheet_build, calc
-            return (calc.check_report(calc.calculate(data)) + sheet_build.warnings_note()).strip()
+            return ((calc.check_report(calc.calculate(data)) + sheet_build.warnings_note()).strip() + qa_note).strip()
+        except Exception:
+            return ""
+    if ext == ".docx":
+        try:
+            from ..doc_qa.docx_lint import lint_docx
+            findings = lint_docx(data)
+            if findings:
+                return f"[QA Notice: {len(findings)} item(s) flagged: {'; '.join(findings[:2])}]"
         except Exception:
             return ""
     if ext == ".pptx" and is_designer_deck(data):

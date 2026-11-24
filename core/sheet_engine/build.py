@@ -386,6 +386,12 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                 else:
                     c.alignment = Alignment(vertical="top")
         last = len(rows) + 1
+        from ..doc_ops.xlsx_ops.financial_styles import is_total_row as _is_tot
+        if rows and _is_tot(str(rows[-1][0] if rows[-1] else "")):
+            for ci in range(1, ncols + 1):
+                cell = ws.cell(row=last, column=ci)
+                cell.font = Font(bold=True)
+                cell.border = Border(top=Side(style="thin", color="94A3B8"), bottom=Side(style="double", color="0F172A"))
 
         # totals
         total_row = None

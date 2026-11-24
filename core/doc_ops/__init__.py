@@ -361,4 +361,12 @@ def create(name: str, content: str, template: Optional[bytes] = None,
         return csv_ops.create(rows), None
     if ext == ".pdf":
         return render_pdf(content, title, images=images), content
+    if ext in (".html", ".htm"):
+        st = content.strip().lower()
+        if st.startswith("<!doctype") or "<html" in st:
+            return content.encode("utf-8"), content
+        from ..agent_tools.doc_theme import render_doc_page
+        return render_doc_page(content, title).encode("utf-8"), content
+    if ext in (".md", ".txt", ".json", ".js", ".css"):
+        return content.encode("utf-8"), content
     raise DocOpError(f"cannot create {ext} documents")

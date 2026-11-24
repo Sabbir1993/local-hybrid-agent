@@ -176,6 +176,15 @@ def create(md: str, template: Optional[bytes] = None, title: str = "", images: O
 
 
 def _create(md: str, template: Optional[bytes], title: str, images: Optional[dict]) -> bytes:
+    if isinstance(md, str) and md.strip().startswith("{") and '"slides"' in md:
+        try:
+            import json
+            from .archetypes import render_archetype_deck
+            spec = json.loads(md)
+            if isinstance(spec, dict) and "slides" in spec:
+                return render_archetype_deck(spec)
+        except Exception:
+            pass
     from . import notes
     deck = outline.parse_outline(md, title)
     attach_images(deck, images)

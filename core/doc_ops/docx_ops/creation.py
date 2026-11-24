@@ -194,7 +194,7 @@ def _setup(doc, title: str, bengali: bool):
         rpr.append(fonts)
     for a in ("w:ascii", "w:hAnsi", "w:eastAsia"):
         fonts.set(qn(a), "Calibri")
-    fonts.set(qn("w:cs"), "Nirmala UI" if bengali else "Calibri")
+    fonts.set(qn("w:cs"), "Kalpurush" if bengali else "Calibri")
     n.font.color.rgb = _hex("1E293B")
     n.paragraph_format.space_after = Pt(6)
     n.paragraph_format.line_spacing = 1.15
@@ -212,7 +212,7 @@ def _setup(doc, title: str, bengali: bool):
             for a in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
                 if fr.get(qn(a)) is not None:
                     del fr.attrib[qn(a)]
-            fr.set(qn("w:cs"), "Nirmala UI" if bengali else "Calibri")
+            fr.set(qn("w:cs"), "Kalpurush" if bengali else "Calibri")
     h1 = st["Heading 2"].element.get_or_add_pPr()
     _borders(h1, {"bottom": (6, _RULE)}, "w:pBdr")
     ttl = st["Title"].element.get_or_add_pPr()
@@ -229,6 +229,18 @@ def _setup(doc, title: str, bengali: bool):
     _put(qp, _shade(_BAND))
     if title:                       # only non-empty values: an empty element re-serialises on the next edit
         doc.core_properties.title = title[:200]
+
+
+def _header(doc, classification: str = "CONFIDENTIAL - INTERNAL BANK USE"):
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Pt
+    sec = doc.sections[0]
+    p = sec.header.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    r = p.add_run(classification.upper())
+    r.font.size, r.font.bold = Pt(8), True
+    r.font.color.rgb = _hex("94A3B8")
+    _borders(p._p.get_or_add_pPr(), {"bottom": (4, "E2E8F0")}, "w:pBdr")
 
 
 def _footer(doc, title: str, cover: bool):
@@ -374,6 +386,7 @@ def create(md: str, title: str = "", images: Optional[dict] = None) -> bytes:
     first_h1 = next((_plain(m.group(1)) for m in re.finditer(r"^#\s+(.*)$", md, re.M)), "")
     doc_title = first_h1 or title
     _setup(doc, doc_title, bengali)
+    _header(doc)
     _footer(doc, doc_title, cover)
 
     i = 0

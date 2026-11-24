@@ -256,6 +256,26 @@ async def _one(uid: int, spec: dict, kind: str, why: list, anchors: tuple = ()) 
     if not query:
         why.append("no description given")
         return None
+
+    # Check if query points to a user-uploaded / local image file
+    try:
+        from pathlib import Path
+        from ..agent_tools import _common_resolve
+        local_p = None
+        if Path(query).is_file():
+            local_p = Path(query)
+        else:
+            cand = _common_resolve(query)
+            if cand and cand.is_file():
+                local_p = cand
+        if local_p:
+            raw = local_p.read_bytes()
+            data = await asyncio.to_thread(prepare, raw)
+            if data:
+                return {"data": data, "credit_host": "Uploaded file", "credit_url": local_p.name, "via": "user"}
+    except Exception:
+        pass
+
     key = (uid, source, aspect, query.lower(), tuple(anchors))
     hit = _cache.get(key)
     if hit:
@@ -381,9 +401,12 @@ def summary(images: dict, notes: list, used_web: bool) -> str:
     """Lines appended to the doc_create / doc_append result."""
     out = []
     if images:
-        web = sum(1 for v in images.values() if v["via"] == "web")
-        gen = len(images) - web
-        bits = ([f"{web} from the web"] if web else []) + ([f"{gen} generated here"] if gen else [])
+        user_uploaded = sum(1 for v in images.values() if v.get("via") == "user")
+        web = sum(1 for v in images.values() if v.get("via") == "web")
+        gen = len(images) - web - user_uploaded
+        bits = ([f"{user_uploaded} uploaded by user"] if user_uploaded else []) + \
+               ([f"{web} from the web"] if web else []) + \
+               ([f"{gen} generated here"] if gen else [])
         out.append(f"Pictures: {len(images)} added ({', '.join(bits)}).")
     out += [f"Picture note - {n}" for n in notes]
     if used_web:

@@ -6,7 +6,9 @@ import time
 from contextvars import ContextVar
 from typing import Optional
 from .constants import (
+    DEFAULT_SUBAGENT_MAX_PARALLEL,
     DEFAULT_SUBAGENT_STEPS,
+    DEFAULT_SUBAGENT_TIMEOUT_S,
     DENIED_TOOLS,
     MAX_SUBAGENT_STEPS,
     SUBAGENT_SYSTEM_PROMPT,
