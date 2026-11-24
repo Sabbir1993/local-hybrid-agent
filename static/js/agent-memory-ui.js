@@ -18,6 +18,7 @@ const AGENT_LIMIT_FIELDS = [
   ]],
   ['Tools', [
     ['python_prompt_nudge', 'Python scripts before a warning', 'Each run_python script needs your approval. After this many in one task the agent is told to use grep / read_file or combine them.'],
+    ['exec_timeout_s', 'Script execution timeout (seconds)', 'Maximum seconds a Python script or workspace tool call is allowed to run before being interrupted.'],
   ]],
   ['Plans', [
     ['@plan_required', 'Require a todo list', 'auto = plan first for multi-step jobs; always = every agent request; off = never enforced. The agent then works one step at a time.'],

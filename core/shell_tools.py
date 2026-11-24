@@ -421,6 +421,12 @@ async def tool_run_shell(args: dict) -> str:
                 return f"error: user denied shell command: {cmd}" + (f" ({note})" if note else "")
 
     raw_t = cfg.get("timeout_s", 0)
+    if not raw_t:
+        try:
+            from .agent_tools.limits import agent_limit
+            raw_t = agent_limit("exec_timeout_s")
+        except Exception:
+            raw_t = DEFAULT_EXEC_TIMEOUT_S
     # 0 = "default", not "forever": the server stops waiting after this, so the
     # companion must kill the process then too instead of leaving it running
     timeout = int(raw_t) if raw_t and int(raw_t) > 0 else DEFAULT_EXEC_TIMEOUT_S

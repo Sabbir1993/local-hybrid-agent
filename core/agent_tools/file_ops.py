@@ -638,9 +638,9 @@ async def tool_run_python(args: dict) -> str:
             return await _missing_msg(uid, script, path_arg, "Write it first, then rerun run_python with that path.")
         script_name = str(path_arg).replace("\\", "/")
         file_state.mark_read(str(script))
-    raw_t = APP_CONFIG.get("agent", {}).get("exec_timeout_s", 0)
+    from .limits import agent_limit
     from ..shell_tools import DEFAULT_EXEC_TIMEOUT_S, python_approval_key, take_code_approval
-    timeout = int(raw_t) if raw_t and int(raw_t) > 0 else DEFAULT_EXEC_TIMEOUT_S
+    timeout = agent_limit("exec_timeout_s") or DEFAULT_EXEC_TIMEOUT_S
     try:
         data = await cb.call(
             uid, "python.run", {"path": str(script), "cwd": str(ws), "timeout": timeout,

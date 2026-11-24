@@ -229,6 +229,15 @@ async function loadCapabilities() {
       <div class="cap-item">
         <label style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
           <div>
+            <b>Execution timeout (seconds)</b>
+            <div class="dim" style="font-size:11px;">Maximum seconds a workspace shell command or script can run before timeout (5 – 7200s)</div>
+          </div>
+          <input type="number" id="shell-timeout-s" min="5" max="7200" value="${sh.timeout_s || 3600}" ${canConfigureGlobal ? '' : 'disabled'} style="width:84px; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:4px 8px; font-size:11.5px; text-align:center;">
+        </label>
+      </div>
+      <div class="cap-item">
+        <label style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+          <div>
             <b>Default Terminal Shell</b>
             <div class="dim" style="font-size:11px;">Preferred shell for companion and console terminal</div>
           </div>
@@ -477,6 +486,19 @@ async function loadCapabilities() {
         toast(pmodeEl.value === 'ask_suspicious'
           ? 'Agent mode: commands that change files now ask for your approval'
           : 'Agent mode: commands that change files are refused');
+      } catch (e) { toast('Save failed: ' + e.message, true); }
+    };
+    const timeoutEl = box.querySelector('#shell-timeout-s');
+    if (timeoutEl) timeoutEl.onchange = async () => {
+      try {
+        const val = parseInt(timeoutEl.value, 10);
+        if (isNaN(val) || val < 5 || val > 7200) throw new Error('Timeout must be between 5 and 7200s');
+        const r = await fetch('/control/shell_settings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ timeout_s: val }),
+        });
+        if (!r.ok) throw new Error('save failed');
+        toast(`Shell execution timeout updated to ${val}s`);
       } catch (e) { toast('Save failed: ' + e.message, true); }
     };
     const addBtn = box.querySelector('#shell-pat-add');
