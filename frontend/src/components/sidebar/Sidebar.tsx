@@ -407,11 +407,8 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
     const startOfTarget = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
     const diffCalendarDays = Math.round((startOfToday - startOfTarget) / (1000 * 60 * 60 * 24));
 
-    if (diffCalendarDays <= 0) {
+    if (diffCalendarDays <= 1) {
       return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    }
-    if (diffCalendarDays === 1) {
-      return '1 day';
     }
     if (diffCalendarDays < 30) {
       return `${diffCalendarDays} days`;

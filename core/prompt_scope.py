@@ -243,8 +243,9 @@ VISUAL_STYLE = (
     'network, mobile, mail, money (or omit); tone is one of blue, purple, green, amber, red, gray (or omit). For '
     'a set of parallel items use {"type":"cards","items":[{"title","text","icon","tone"}]}.\n'
     "When the picture has branches, decisions, loops, parallel paths or several actors talking (a sequence or state diagram), "
-    "use ONE fenced `mermaid` block instead (flowchart TD, sequenceDiagram or stateDiagram-v2): short labels, quote any "
-    'label with brackets, slashes or colons (A["Load balancer (L7)"]), no styling or click directives.\n'
+    "use ONE fenced `mermaid` block instead (flowchart TD, sequenceDiagram or stateDiagram-v2): short labels. In Mermaid flowcharts, "
+    'ALWAYS wrap node text in double quotes inside brackets: id["Text (Details)"], id{"Decision?"}, NEVER unquoted id[Text (Details)] '
+    'as unquoted parentheses or special characters break Mermaid syntax; no styling or click directives.\n'
     "For numbers (trends, shares, comparisons) NEVER draw ASCII or text-block charts; use a chart block instead:\n"
     "```visual\n"
     '{"type":"chart","kind":"line","title":"Attacks per year","unit":"%","labels":["2024","2025","2026"],'
@@ -256,7 +257,8 @@ VISUAL_STYLE = (
 
 # Always on when the full VISUAL_STYLE is not added: without any diagram guidance the model draws ASCII art.
 NO_ASCII_DIAGRAMS = ("DIAGRAMS: never draw diagrams, flows or charts with ASCII or box-drawing characters (┌─┐ │ └─┘ ─▶). "
-                     "If a picture helps, use one fenced `mermaid` block (flowchart TD / sequenceDiagram) with short labels.")
+                     'If a picture helps, use one fenced `mermaid` block (flowchart TD / sequenceDiagram) with short labels. '
+                     'In Mermaid, always quote node text inside brackets: id["Label (details)"].')
 
 _VISUAL_RE = re.compile(
     r"\b(diagram|flow\s*chart|flowchart|architecture|work\s*flow|workflow|pipeline|life\s*cycle|lifecycle|sequence"

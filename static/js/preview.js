@@ -23,6 +23,89 @@ function initMermaidTheme() {
   });
 }
 
+// Auto-sanitize LLM-generated Mermaid flowchart syntax (quote unquoted labels containing parentheses/symbols)
+function sanitizeMermaid(src) {
+  if (!src || !src.trim()) return src;
+  const lines = src.split('\n');
+  let diagType = 'unknown';
+  for (const line of lines) {
+    const s = line.trim().toLowerCase();
+    if (s && !s.startsWith('%%')) {
+      if (s.startsWith('flowchart') || s.startsWith('graph')) diagType = 'flowchart';
+      break;
+    }
+  }
+  if (diagType !== 'flowchart') return src;
+
+  const shapes = [
+    ['([', '])', /\(\[/], ['[[', ']]', /\[\[/], ['[(', ')]', /\[\(/], ['{{', '}}', /\{\{/],
+    ['(((', ')))', /\(\(\(/], ['((', '))', /\(\(/], ['[/', '/]', /\[\//], ['[\\', '\\]', /\[\\/],
+    ['[', ']', /\[/], ['{', '}', /\{/], ['(', ')', /\(/],
+  ];
+  const nodeRegex = /(^|[\s;&,\-\-><])([a-zA-Z0-9_.-]+)\s*(?:\(\[(?<stadium>.*?)\]\)|\[\[(?<subroutine>.*?)\]\]|\[\((?<cylinder>.*?)\)\]|\{\{(?<hexagon>.*?)\}\}|\(\(\((?<dcircle>.*?)\)\)\)|\(\((?<circle>.*?)\)\)|\[\/(?<trapezoid1>.*?)[\\\/]\]|\[\\(?<trapezoid2>.*?)[\\\/]\]|\[(?<rect>.*?)\]|\{(?<rhombus>.*?)\}|\((?<round>.*?)\))/g;
+
+  function fixContent(content) {
+    const raw = (content || '').trim();
+    if (!raw) return '';
+    if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) return `"${raw.slice(1, -1).replace(/"/g, "'")}"`;
+    return `"${raw.replace(/"/g, "'")}"`;
+  }
+
+  const outLines = [];
+  for (const line of lines) {
+    const stripped = line.trim();
+    if (!stripped || stripped.startsWith('%%') || stripped.startsWith('classDef') || stripped.startsWith('style') || stripped.startsWith('linkStyle') || stripped.startsWith('click') || stripped.startsWith('flowchart') || stripped.startsWith('graph')) {
+      outLines.push(line);
+      continue;
+    }
+    const edgeLabels = [];
+    let lineNoEdges = line.replace(/\|([^\|\r\n]+)\|/g, (_, rawEdge) => {
+      const raw = (rawEdge || '').trim();
+      let lbl = raw;
+      if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
+        lbl = `"${raw.slice(1, -1).replace(/"/g, "'")}"`;
+      } else if (/[()[\]{}:;~$৳&<>]/.test(raw)) {
+        lbl = `"${raw.replace(/"/g, "'")}"`;
+      }
+      const idx = edgeLabels.length;
+      edgeLabels.push(lbl);
+      return `|__EDGE_LABEL_${idx}__|`;
+    });
+
+    for (const [opStr, clStr, opRe] of shapes) {
+      const escapedCloseFirst = clStr[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const unclosedRe = new RegExp(`([a-zA-Z0-9_.-]+)\\s*${opRe.source}([^${escapedCloseFirst}\\r\\n]*)$`);
+      const unclosedMatch = unclosedRe.exec(lineNoEdges);
+      if (unclosedMatch) {
+        lineNoEdges = lineNoEdges.slice(0, unclosedMatch.index) + `${unclosedMatch[1]}${opStr}${unclosedMatch[2].trim()}${clStr}`;
+        break;
+      }
+    }
+
+    let cleanedLine = lineNoEdges.replace(nodeRegex, (match, prefix, nid, ...args) => {
+      const groups = args[args.length - 1] || {};
+      const shapeDefs = [
+        ['stadium', '([', '])'], ['subroutine', '[[', ']]'], ['cylinder', '[(', ')]'],
+        ['hexagon', '{{', '}}'], ['dcircle', '(((', ')))'], ['circle', '((', '))'],
+        ['trapezoid1', '[/', '/]'], ['trapezoid2', '[\\', '\\]'], ['rect', '[', ']'],
+        ['rhombus', '{', '}'], ['round', '(', ')'],
+      ];
+      for (const [key, op, cl] of shapeDefs) {
+        if (groups[key] !== undefined && groups[key] !== null) {
+          return `${prefix}${nid}${op}${fixContent(groups[key])}${cl}`;
+        }
+      }
+      return match;
+    });
+
+    edgeLabels.forEach((lbl, idx) => {
+      cleanedLine = cleanedLine.replace(`__EDGE_LABEL_${idx}__`, lbl);
+    });
+    outLines.push(cleanedLine);
+  }
+  return outLines.join('\n');
+}
+
 // Render all inline mermaid blocks present in container
 async function renderInlineMermaid(container) {
   if (typeof mermaid === 'undefined' || !container) return;
@@ -32,12 +115,13 @@ async function renderInlineMermaid(container) {
     const el = els[i];
     el.setAttribute('data-processed', 'true');
     const code = el.textContent.trim();
+    const cleanCode = sanitizeMermaid(code);
     const id = 'mermaid-render-' + Math.random().toString(36).slice(2, 9);
     const parentBox = el.closest('.mermaid-box');
     const viewport = parentBox ? parentBox.querySelector('.mermaid-viewport') : null;
     if (!viewport) continue;
     try {
-      const { svg } = await mermaid.render(id, code);
+      const { svg } = await mermaid.render(id, cleanCode);
       viewport.innerHTML = svg;
       el.style.display = 'none';
     } catch (err) {
@@ -370,7 +454,7 @@ async function renderMermaidModalPreview(code, container, controls) {
   };
 
   try {
-    const cleanCode = (code || '').trim();
+    const cleanCode = sanitizeMermaid((code || '').trim());
     const id = 'mermaid-modal-' + Math.random().toString(36).slice(2, 9);
     const { svg } = await mermaid.render(id, cleanCode);
     vp.innerHTML = svg;
