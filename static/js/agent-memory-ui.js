@@ -33,7 +33,7 @@ const AGENT_LIMIT_FIELDS = [
 ];
 
 function agentLimitsHtml(d) {
-  const v = d.values, r = d.ranges, inp = 'width:84px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:7px; padding:6px 10px; font-size:12px; box-sizing:border-box;';
+  const v = d.values, r = d.ranges, inp = 'width:94px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:7px; padding:6px 10px; font-size:12px; box-sizing:border-box; text-align:right;';
   const sel = ([key, label, help]) => `
     <div style="display:flex; align-items:center; gap:6px; margin-top:6px; flex-wrap:wrap;" title="${esc(help)}">
       <span style="min-width:230px;">${esc(label)}</span>

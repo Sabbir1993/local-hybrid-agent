@@ -204,70 +204,86 @@ async function loadCapabilities() {
     const sh = d.shell || {};
     const canConfigureGlobal = !!(window.hasPerm && window.hasPerm('settings.shell.configure'));
     const shellInner = `
-      <div class="cap-tool-entry" style="margin-bottom:6px;">
+      <div class="cap-tool-entry" style="margin-bottom:12px; padding:8px 12px; background:var(--panel2); border:1px solid var(--border); border-radius:8px;">
         <span class="cap-tool-badge shell"><span class="tool-badge-ico">${capIcon('shell')}</span><code>run_shell</code></span>
-        <span class="cap-tool-desc">Workspace shell command execution</span>
+        <span class="cap-tool-desc" style="font-size:12px; color:var(--dim); margin-left:8px;">Workspace shell command execution and script runtime</span>
       </div>
-      <div class="cap-item">
-        <label style="display:flex; align-items:center; gap:6px; cursor:${canConfigureGlobal ? 'pointer' : 'default'};">
-          <input type="checkbox" id="shell-ask" ${sh.ask_first ? 'checked' : ''} ${canConfigureGlobal ? '' : 'disabled'} style="accent-color:var(--green);">
-          <b>Ask before running</b> <span class="dim">(permission modal; matched patterns skip asking${canConfigureGlobal ? '' : ' — admin-only setting'})</span>
-        </label>
+
+      <div style="background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:14px;">
+        <div class="cap-item" style="padding:0 0 12px 0; border-bottom:1px solid rgba(255,255,255,0.06);">
+          <label style="display:flex; align-items:center; justify-content:space-between; gap:16px;">
+            <div>
+              <div style="font-weight:600; font-size:13px; color:var(--text);">Default Terminal Shell</div>
+              <div class="dim" style="font-size:11.5px; margin-top:2px;">Preferred shell for companion and workspace commands</div>
+            </div>
+            <select id="setting-terminal-shell" style="min-width:190px; height:34px; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:0 10px; font-size:12px; outline:none; cursor:pointer; box-sizing:border-box;">
+              <option value="powershell">PowerShell (Default)</option>
+              <option value="cmd">Command Prompt (CMD)</option>
+              <option value="bash">Git Bash / WSL (Bash)</option>
+              <option value="pwsh">PowerShell Core (PWSH)</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="cap-item" style="padding:12px 0; border-bottom:1px solid rgba(255,255,255,0.06);">
+          <label style="display:flex; align-items:center; justify-content:space-between; gap:16px;">
+            <div>
+              <div style="font-weight:600; font-size:13px; color:var(--text);">Execution Timeout</div>
+              <div class="dim" style="font-size:11.5px; margin-top:2px;">Maximum duration a workspace shell command or script can run before timeout (5 – 7200s)</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px;">
+              <input type="number" id="shell-timeout-s" min="5" max="7200" value="${sh.timeout_s || 3600}" ${canConfigureGlobal ? '' : 'disabled'} style="width:90px; height:34px; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:0 10px; font-size:12px; font-weight:500; text-align:right; outline:none; box-sizing:border-box;">
+              <span class="dim" style="font-size:12px; font-weight:500; min-width:24px;">sec</span>
+            </div>
+          </label>
+        </div>
+
+        <div class="cap-item" style="padding:12px 0; border-bottom:1px solid rgba(255,255,255,0.06);">
+          <label style="display:flex; align-items:center; justify-content:space-between; gap:16px; cursor:${canConfigureGlobal ? 'pointer' : 'default'};">
+            <div>
+              <div style="font-weight:600; font-size:13px; color:var(--text);">Ask Before Running</div>
+              <div class="dim" style="font-size:11.5px; margin-top:2px;">Show permission modal for unmatched commands (matched allow patterns skip asking)</div>
+            </div>
+            <input type="checkbox" id="shell-ask" ${sh.ask_first ? 'checked' : ''} ${canConfigureGlobal ? '' : 'disabled'} style="width:18px; height:18px; accent-color:var(--green); cursor:pointer;">
+          </label>
+        </div>
+
+        <div class="cap-item" style="padding:12px 0 0 0;">
+          <label style="display:flex; align-items:center; justify-content:space-between; gap:16px;">
+            <div>
+              <div style="font-weight:600; font-size:13px; color:var(--text);">Agent Mode: Commands that Change Files</div>
+              <div class="dim" style="font-size:11.5px; margin-top:2px;">Set-Content, Out-File, mkdir, pip install from Agent mode. Dangerous commands are always refused.</div>
+            </div>
+            <select id="shell-personal-mode" ${canConfigureGlobal ? '' : 'disabled'} title="${canConfigureGlobal ? '' : 'admin-only setting'}" style="min-width:190px; height:34px; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:0 10px; font-size:12px; outline:none; cursor:pointer; box-sizing:border-box;">
+              <option value="ask_suspicious" ${sh.personal_mode === 'ask_suspicious' ? 'selected' : ''}>Ask me each time</option>
+              <option value="strict" ${sh.personal_mode === 'ask_suspicious' ? '' : 'selected'}>Always refuse</option>
+            </select>
+          </label>
+        </div>
       </div>
-      <div class="cap-item">
-        <label style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-          <div>
-            <b>Agent mode: commands that change files</b>
-            <div class="dim" style="font-size:11px;">Set-Content, Out-File, mkdir, pip install ... from a Personal Agent. Disk format and wiping a drive are always refused.</div>
-          </div>
-          <select id="shell-personal-mode" ${canConfigureGlobal ? '' : 'disabled'} title="${canConfigureGlobal ? '' : 'admin-only setting'}" style="background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:4px 8px; font-size:11.5px; outline:none; cursor:pointer;">
-            <option value="ask_suspicious" ${sh.personal_mode === 'ask_suspicious' ? 'selected' : ''}>Ask me each time</option>
-            <option value="strict" ${sh.personal_mode === 'ask_suspicious' ? '' : 'selected'}>Always refuse</option>
-          </select>
-        </label>
-      </div>
-      <div class="cap-item">
-        <label style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-          <div>
-            <b>Execution timeout (seconds)</b>
-            <div class="dim" style="font-size:11px;">Maximum seconds a workspace shell command or script can run before timeout (5 – 7200s)</div>
-          </div>
-          <input type="number" id="shell-timeout-s" min="5" max="7200" value="${sh.timeout_s || 3600}" ${canConfigureGlobal ? '' : 'disabled'} style="width:84px; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:4px 8px; font-size:11.5px; text-align:center;">
-        </label>
-      </div>
-      <div class="cap-item">
-        <label style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-          <div>
-            <b>Default Terminal Shell</b>
-            <div class="dim" style="font-size:11px;">Preferred shell for companion and console terminal</div>
-          </div>
-          <select id="setting-terminal-shell" style="background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:4px 8px; font-size:11.5px; outline:none; cursor:pointer;">
-            <option value="powershell">PowerShell (Default)</option>
-            <option value="cmd">Command Prompt (CMD)</option>
-            <option value="bash">Git Bash / WSL (Bash)</option>
-            <option value="pwsh">PowerShell Core (PWSH)</option>
-          </select>
-        </label>
-      </div>
-      <div class="cap-item">
-        <b>Global allowed patterns</b> <span class="dim">(wildcards ok, <code>*</code> = allow all — admin-managed, applies to every user)</span>
-        <div id="shell-pats" style="display:flex; flex-direction:column; gap:3px; margin-top:4px;">
+
+      <div class="cap-item" style="background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:14px 16px;">
+        <div style="font-weight:600; font-size:13px; color:var(--text); margin-bottom:4px;">Global Allowed Patterns</div>
+        <div class="dim" style="font-size:11.5px; margin-bottom:10px;">Wildcards supported (<code>*</code> = allow all). Admin-managed rules that apply to all users without prompting.</div>
+        <div id="shell-pats" style="display:flex; flex-direction:column; gap:6px;">
           ${(sh.allow_patterns || []).map((p, i) => `
-            <div style="display:flex; gap:5px; align-items:center;">
-              <input type="text" class="shell-pat" data-i="${i}" value="${esc(p)}" ${canConfigureGlobal ? '' : 'disabled'} style="flex:1; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px; font-family:monospace;">
-              ${canConfigureGlobal ? `<button class="btn ghost shell-pat-del" data-i="${i}" style="width:auto; margin:0; padding:2px 7px; font-size:10px; color:var(--red);">✕</button>` : ''}
-            </div>`).join('') || '<div class="dim" style="font-size:10.5px;">(none)</div>'}
+            <div style="display:flex; gap:8px; align-items:center;">
+              <input type="text" class="shell-pat" data-i="${i}" value="${esc(p)}" ${canConfigureGlobal ? '' : 'disabled'} style="flex:1; height:32px; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:0 10px; font-size:12px; font-family:'JetBrains Mono', monospace; box-sizing:border-box;">
+              ${canConfigureGlobal ? `<button class="btn ghost shell-pat-del" data-i="${i}" style="width:32px; height:32px; margin:0; padding:0; display:flex; align-items:center; justify-content:center; border-radius:6px; color:var(--red);" title="Remove pattern">✕</button>` : ''}
+            </div>`).join('') || '<div class="dim" style="font-size:11.5px; padding:6px 0;">(no global patterns configured)</div>'}
         </div>
         ${canConfigureGlobal ? `
-        <div style="display:flex; gap:5px; margin-top:5px;">
-          <input type="text" id="shell-pat-new" placeholder="e.g. git * or npx skills * or *" style="flex:1; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:10.5px; font-family:monospace;">
-          <button class="btn ghost" id="shell-pat-add" style="width:auto; margin:0; padding:3px 10px; font-size:10.5px;">+ Add</button>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          <input type="text" id="shell-pat-new" placeholder="e.g. git * or npx skills * or *" style="flex:1; height:32px; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:0 10px; font-size:12px; font-family:'JetBrains Mono', monospace; box-sizing:border-box;">
+          <button class="btn ghost" id="shell-pat-add" style="height:32px; margin:0; padding:0 14px; font-size:12px; font-weight:600; border-radius:6px;">+ Add</button>
         </div>
-        <button class="btn accent" id="shell-pats-save" style="width:auto; margin:6px 0 0; padding:4px 12px; font-size:10.5px;">💾 Save patterns</button>
-        ` : `<p class="dim" style="font-size:10px; margin:5px 0 0;">Only an admin can edit the global list. Use the shell permission prompt's "Always allow for me" to add your own.</p>`}
-        <div style="margin-top:10px;"><b>Allowed for me</b>
-          <span class="dim" style="font-size:10px;"> - commands you chose to always allow (your account only)</span>
-          <div id="shell-my-pats" class="dim" style="font-size:10.5px; margin-top:4px;">Loading...</div></div>
+        <button class="btn accent" id="shell-pats-save" style="margin-top:12px; height:34px; padding:0 16px; font-size:12px; font-weight:600; border-radius:6px;">💾 Save patterns</button>
+        ` : `<p class="dim" style="font-size:11px; margin:8px 0 0;">Only an admin can edit the global list. Use the shell permission prompt's "Always allow for me" to add your own.</p>`}
+        <div style="margin-top:14px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.06);">
+          <div style="font-weight:600; font-size:12.5px; color:var(--text);">Allowed for me</div>
+          <div class="dim" style="font-size:11px; margin-top:2px;">Commands you chose to always allow for your account only</div>
+          <div id="shell-my-pats" class="dim" style="font-size:11.5px; margin-top:6px;">Loading...</div>
+        </div>
       </div>`;
     h += capSection('shell', '⌨️ Shell Execution', sh.enabled, shellInner,
       'run_shell tool — agent runs commands like "npx skills add …" in the workspace');
