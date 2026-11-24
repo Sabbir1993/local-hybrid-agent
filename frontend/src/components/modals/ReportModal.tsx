@@ -361,20 +361,21 @@ export const ReportModal: React.FC = () => {
     >
       {/* Top Header Bar with Back to Chat */}
       <div
-        className="flex items-center border-b border-border bg-panel2 select-none flex-shrink-0"
+        className="flex items-center border-b border-border bg-panel2 select-none flex-shrink-0 w-full"
         style={{ height: '48px', minHeight: '48px', maxHeight: '48px' }}
       >
-        {/* Left section aligned with sidebar (240px) */}
+        {/* Left section aligned with sidebar on desktop, responsive on mobile */}
         <div
-          className="flex items-center px-4 border-r border-border flex-shrink-0"
-          style={{ width: '240px', minWidth: '240px', maxWidth: '240px', height: '100%' }}
+          className="flex items-center px-2 sm:px-4 border-r border-border flex-shrink-0 w-auto sm:w-[240px] sm:min-w-[240px] sm:max-w-[240px] h-full"
         >
           <button
-            className="btn ghost flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-border hover:bg-panel text-text transition-colors whitespace-nowrap w-full"
+            className="btn ghost flex items-center justify-center gap-1.5 text-xs font-semibold px-2.5 sm:px-3 py-1.5 rounded-lg border border-border hover:bg-panel text-text transition-colors whitespace-nowrap w-full"
             onClick={handleBackToChat}
             title="Return to active chat"
           >
-            ← Back to Chat
+            <span>←</span>
+            <span className="hidden sm:inline">Back to Chat</span>
+            <span className="sm:hidden">Back</span>
           </button>
         </div>
 

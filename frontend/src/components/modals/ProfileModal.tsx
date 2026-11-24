@@ -131,9 +131,9 @@ export const ProfileModal: React.FC<Props> = ({ onClose }) => {
           </button>
         </div>
 
-        <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 20, padding: '20px 24px' }}>
+        <form onSubmit={handleSave} className="flex flex-col gap-4 sm:gap-5 p-4 sm:p-6">
           {/* Avatar Picture Row */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '14px 16px', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 12, border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+          <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-5 p-3.5 sm:p-4 bg-panel2 rounded-xl border border-border text-center sm:text-left">
             <div
               style={{
                 width: 72,
@@ -160,7 +160,7 @@ export const ProfileModal: React.FC<Props> = ({ onClose }) => {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'center' }}>
                 <label
                   style={{
                     display: 'inline-flex',
@@ -209,7 +209,7 @@ export const ProfileModal: React.FC<Props> = ({ onClose }) => {
           )}
 
           {/* Form Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
             {/* Display Name */}
             <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--dim, #94a3b8)', marginBottom: 6 }}>
@@ -301,7 +301,7 @@ export const ProfileModal: React.FC<Props> = ({ onClose }) => {
             </div>
 
             {/* Gender */}
-            <div style={{ gridColumn: 'span 2' }}>
+            <div className="col-span-1 sm:col-span-2">
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--dim, #94a3b8)', marginBottom: 6 }}>
                 <Heart size={13} style={{ color: 'var(--accent, #3b82f6)' }} />
                 <span>Gender</span>

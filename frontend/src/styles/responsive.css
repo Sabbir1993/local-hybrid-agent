@@ -365,6 +365,121 @@
   .effort-item-hint { display: block; }
 }
 
+/* ------------------------------------------------------------------ Fullscreen Modals on Mobile */
+@media (max-width: 768px) {
+  #settings-page,
+  #report-page,
+  #audit-page,
+  #db-page {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100dvh !important;
+    overflow-x: hidden !important;
+  }
+
+  /* Database Split View Stacking on Mobile */
+  .db-split-body {
+    flex-direction: column !important;
+    overflow-y: auto !important;
+  }
+  .db-sidebar {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    max-height: 180px !important;
+    flex-shrink: 0 !important;
+  }
+  .db-main-pane {
+    width: 100% !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+  }
+  .db-results-table-wrap {
+    width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Report & Analytics Modal Mobile */
+  .rep-tabs {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 4px !important;
+  }
+  .rep-tabs::-webkit-scrollbar { display: none; }
+  .rep-tab {
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+  }
+  .rep-grid-4,
+  .rep-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+  .rep-table-wrap,
+  .rep-table-container {
+    width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Audit Trail Modal Mobile */
+  .audit-filter-bar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+  .audit-filter-bar > * {
+    width: 100% !important;
+  }
+  .audit-table-wrap {
+    width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Modal Dialog Boxes (Profile, Custom Agent, Customize) */
+  .profile-modal-box,
+  .ca-modal-box,
+  .cz-modal-box,
+  .proj-modal-box {
+    width: 95vw !important;
+    max-width: 95vw !important;
+    max-height: 90dvh !important;
+    margin: auto !important;
+  }
+
+  /* Customize Modal Bar */
+  .cz-bar {
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+  }
+  .cz-tabs,
+  .cz-seg {
+    overflow-x: auto !important;
+    max-width: 100% !important;
+  }
+  .cz-search {
+    width: 100% !important;
+    flex: 1 1 100% !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .rep-grid-4,
+  .rep-summary-grid {
+    grid-template-columns: 1fr !important;
+  }
+  header {
+    padding: 0 4px !important;
+  }
+  header .header-tool-cluster {
+    gap: 1px !important;
+  }
+}
+
 /* ------------------------------------------------------------------ touch: tap targets */
 @media (pointer: coarse) {
   .claude-bar-left > button,

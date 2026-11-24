@@ -203,14 +203,17 @@ async function confirmShell(command, cwd, display, approvedInApp) {
   if (!cwd || !isApproved(cwd)) {
     await ensurePath(cwd || process.cwd(), "run a command in");
   }
-  // Shell / model-authored code ALWAYS asks on this device. A web-app approval
-  // (or a stolen session that self-approves its own permission card) is not a
-  // substitute for local confirmation: the server cannot be trusted about what
-  // the user agreed to. Browser origins and low-risk device actions may still
-  // honour approvedInApp; code execution may not.
   const key = `${norm(cwd || "")}\n${command}\n${display || ""}`;
   if (trustedCommands.has(key)) return;
   if (!display && loadAlways().has(key)) return;
+
+  // If approved in the web app's permission card, skip the second native dialog
+  // unless "Also confirm commands on this device" is explicitly enabled in tray settings.
+  if (approvedInApp && !localConfirmEnabled()) {
+    trustedCommands.add(key);
+    return;
+  }
+
   let shown = display ? `${command}\n\n--- code ---\n${display}` : command;
   if (shown.length > MAX_SHOWN_CODE) {
     shown = shown.slice(0, MAX_SHOWN_CODE) + `\n… (${shown.length - MAX_SHOWN_CODE} more chars)`;

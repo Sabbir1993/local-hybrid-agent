@@ -731,7 +731,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       (typeof title === 'string' && title.toLowerCase().includes('attachment'));
 
     const isDockPreview = !isAttachment && (
-      ['html', 'htm', 'md', 'markdown', 'svg', 'mermaid'].includes(ext) ||
+      ['html', 'htm', 'md', 'markdown', 'svg', 'mermaid', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'].includes(ext) ||
+      cleanPath.startsWith('data:image/') ||
       cleanPath.includes('diagram')
     );
 
@@ -1843,6 +1844,11 @@ export const useAppStore = create<AppState>((set, get) => ({
                     setBatch: (list) => get().setSubagentsBatch(list),
                     update: (key, patch) => get().updateSubagent(key, patch),
                     activate: () => get().setDockTab('subagents'),
+                  },
+                  onScreenshot: (shotPath) => {
+                    if (get().appMode !== 'chat') {
+                      get().openPreviewModal(shotPath, 'Live Screenshot', null, shotPath.startsWith('data:') ? 'common' : 'ws', false);
+                    }
                   },
                 });
               } catch (e: any) {

@@ -76,7 +76,7 @@ async function loadCapabilities() {
             <b style="font-size:13px; display:flex; align-items:center; gap:6px;">📊 Thinking-Wise Tool Call &amp; Token Budget Matrix</b>
             <div class="dim" style="font-size:11px; margin-top:2px;">Configure tool/web call limits, token budget, and max rounds per thinking level (as selected in the chat prompt bar)</div>
           </div>
-          ${canManageMcp ? '<button class="btn accent" id="web-budget-save" style="width:auto; margin:0; padding:5px 14px; font-size:11.5px; font-weight:600; border-radius:6px;">💾 Save Budget</button>' : ''}
+          ${canManageMcp ? '<button class="btn sm primary" id="web-budget-save">💾 Save Budget</button>' : ''}
         </div>
         <div style="overflow-x:auto; margin-top:8px;">
           <table class="cap-budget-matrix" style="width:100%; border-collapse:collapse; font-size:12px; min-width:480px;">
@@ -168,13 +168,13 @@ async function loadCapabilities() {
               <span class="cap-dot ${s.status === 'ready' ? 'on' : (s.status === 'error' ? 'err' : '')}" title="${esc(s.status)}"></span>
               <b>${esc(s.name)}</b> <span class="mcp-scope-badge ${s.scope === 'user' ? 'user' : ''}" title="${s.scope === 'user' ? 'Only you can use this server' : 'Available to every user'}">${s.scope === 'user' ? 'personal' : 'global'}</span>
               <span class="dim">(${esc(s.transport)}) · ${s.status === 'ready' ? s.tools.length + ' tool(s)' : esc(s.status)}</span>
-              ${(s.scope === 'user' || canManageMcp) ? `<span style="margin-left:auto; display:flex; gap:4px;" data-stop>
+              ${(s.scope === 'user' || canManageMcp) ? `<span style="margin-left:auto; display:flex; gap:4px; align-items:center;" data-stop>
                 ${(s.transport === 'http' && (s.auth || s.auth_required)) ? (s.signed_in
-                  ? `<button class="btn ghost mcp-srv-signout" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;" title="Forget the stored sign-in (you can revoke the app's access in your account settings too)">🔓 Sign out</button>`
-                  : `<button class="btn accent mcp-srv-oauth" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;" title="Sign in to this server's account (opens your browser)">🔑 Connect account</button>`) : ''}
-                <button class="btn ghost mcp-srv-reconnect" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;" title="Reconnect (e.g. after finishing an OAuth login)">↻</button>
-                <button class="btn ghost mcp-srv-edit" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" style="width:auto; margin:0; padding:1px 8px; font-size:10px;">Edit</button>
-                <button class="btn ghost mcp-srv-del" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" style="width:auto; margin:0; padding:1px 8px; font-size:10px; color:var(--red);">✕</button>
+                  ? `<button class="btn xs ghost mcp-srv-signout" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" title="Forget the stored sign-in (you can revoke the app's access in your account settings too)">🔓 Sign out</button>`
+                  : `<button class="btn xs primary mcp-srv-oauth" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" title="Sign in to this server's account (opens your browser)">🔑 Connect account</button>`) : ''}
+                <button class="btn xs secondary mcp-srv-reconnect" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}" title="Reconnect (e.g. after finishing an OAuth login)">↻</button>
+                <button class="btn xs secondary mcp-srv-edit" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}">Edit</button>
+                <button class="btn xs danger mcp-srv-del" data-name="${esc(s.name)}" data-scope="${esc(s.scope || 'global')}">✕</button>
               </span>` : ''}
             </summary>
             ${s.error ? `<div class="dim" style="font-size:10px; color:var(--red); margin:4px 0 4px 18px;">${esc(s.error)}</div>` : ''}

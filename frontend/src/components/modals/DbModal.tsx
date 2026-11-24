@@ -396,33 +396,35 @@ export const DbModal: React.FC = () => {
     >
       {/* Top Header Bar with Back to Chat */}
       <div
-        className="flex items-center border-b border-border bg-panel2 select-none flex-shrink-0"
+        className="flex items-center border-b border-border bg-panel2 select-none flex-shrink-0 w-full"
         style={{ height: '48px', minHeight: '48px', maxHeight: '48px' }}
       >
-        {/* Left section aligned with sidebar (240px) */}
+        {/* Left section aligned with sidebar on desktop, responsive on mobile */}
         <div
-          className="flex items-center px-4 border-r border-border flex-shrink-0"
-          style={{ width: '240px', minWidth: '240px', maxWidth: '240px', height: '100%' }}
+          className="flex items-center px-2 sm:px-4 border-r border-border flex-shrink-0 w-auto sm:w-[240px] sm:min-w-[240px] sm:max-w-[240px] h-full"
         >
           <button
-            className="btn ghost flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-border hover:bg-panel text-text transition-colors whitespace-nowrap w-full"
+            className="btn ghost flex items-center justify-center gap-1.5 text-xs font-semibold px-2.5 sm:px-3 py-1.5 rounded-lg border border-border hover:bg-panel text-text transition-colors whitespace-nowrap w-full"
             onClick={handleBackToChat}
             title="Return to active chat"
           >
-            ← Back to Chat
+            <span>←</span>
+            <span className="hidden sm:inline">Back to Chat</span>
+            <span className="sm:hidden">Back</span>
           </button>
         </div>
 
         {/* Menu title & controls after left sidebar divider */}
-        <div className="flex items-center justify-between px-5 flex-1 min-w-0">
-          <span className="font-bold text-xs tracking-wider flex items-center gap-2 text-text whitespace-nowrap flex-shrink-0">
-            🗄️ Database Explorer &amp; SQL Console
+        <div className="flex items-center justify-between px-2 sm:px-5 flex-1 min-w-0 gap-2">
+          <span className="font-bold text-xs tracking-wider flex items-center gap-2 text-text whitespace-nowrap flex-shrink-0 truncate">
+            🗄️ Database Explorer
           </span>
 
           {/* Database Selector in Header */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3 flex-shrink-0">
             <label
               htmlFor="db-select"
+              className="hidden sm:inline"
               style={{ fontSize: '11px', fontWeight: 700, color: 'var(--dim)', textTransform: 'uppercase', letterSpacing: '0.8px' }}
             >
               Database:
@@ -430,7 +432,7 @@ export const DbModal: React.FC = () => {
             <select
               id="db-select"
               className="db-select-el"
-              style={{ minWidth: '240px', width: 'auto', padding: '4px 10px' }}
+              style={{ minWidth: 0, maxWidth: '160px', width: 'auto', padding: '4px 8px', fontSize: '11px' }}
               value={currentDbId}
               onChange={(e) => setCurrentDbId(e.target.value)}
             >

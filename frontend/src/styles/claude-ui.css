@@ -3155,6 +3155,9 @@ body.is-native-app .tri-mode-switch {
 .ct-mono, .ct-row code.ct-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ct-note { color: var(--dim, #8b949e); font-size: 12px; white-space: nowrap; flex: 0 0 auto; }
+.ct-diff-stat { display: inline-flex; align-items: center; gap: 5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; font-weight: 600; line-height: 1; vertical-align: middle; margin-left: 6px; flex: 0 0 auto; }
+.ct-diff-add { color: #10b981; }
+.ct-diff-del { color: #ef4444; }
 .ct-badge-fail { background: rgba(239,68,68,0.15); color: #ef4444; font-size: 10.5px; font-weight: 600;
   padding: 1px 7px; border-radius: 5px; flex: 0 0 auto; }
 .ct-row > summary .ct-badge-fail { margin-left: auto; }

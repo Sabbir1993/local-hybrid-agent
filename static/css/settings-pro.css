@@ -169,29 +169,231 @@
 #settings-page .settings-panel input[type="date"] { color: var(--text) !important; }
 #settings-page .mono, #settings-page .smp-val { font-family: var(--sp-mono); }
 
-#settings-page .btn {
-  min-height: 36px; padding: 7px 16px; border-radius: 10px; font: 600 13px var(--sp-body);
-  border: 1px solid var(--sp-line-strong); background: var(--sp-raised); color: var(--text);
-  transition: background .14s ease, border-color .14s ease, transform .1s ease, box-shadow .14s ease;
+/* ---------------- Unified Buttons (Theme Pattern) ---------------- */
+#settings-page .btn,
+#settings-page button.btn,
+#settings-page a.btn,
+.ca-modal-box .btn,
+.ca-modal-box button.btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  min-height: 36px !important;
+  height: 36px !important;
+  padding: 0 16px !important;
+  border-radius: 9px !important;
+  font-family: var(--sp-body) !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  letter-spacing: -0.01em !important;
+  border: 1px solid var(--sp-line-strong) !important;
+  background: var(--sp-raised) !important;
+  color: var(--text) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12) !important;
+  width: auto !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+  white-space: nowrap !important;
+  text-decoration: none !important;
+  cursor: pointer !important;
+  user-select: none !important;
+  transition: background .14s ease, border-color .14s ease, transform .1s ease, box-shadow .14s ease, color .14s ease !important;
 }
-/* Voice Collection panel: buttons sit side by side in rows and grids. The base .btn adds margin-bottom: 5px to every
-   button except the last in its parent, which made the last button of each row 5px taller. One height, no margin. */
-#settings-page #sec-speech .btn { margin: 0 !important; min-height: 38px; height: 38px; padding-top: 0 !important; padding-bottom: 0 !important;
-  box-sizing: border-box; white-space: nowrap; line-height: 1; }
-#settings-page #sec-speech .btn.vc-sm { min-height: 32px; height: 32px; padding-left: 10px !important; padding-right: 10px !important; font-size: 12px; }
-#settings-page #sec-speech .btn.vc-inline { min-height: 0; height: auto; padding: 0 4px !important; border: none; background: transparent; }
-#settings-page #sec-speech .btn.accent { box-shadow: none; }
-#settings-page .btn:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--sp-line-strong)); background: var(--sp-tint); }
-#settings-page .btn:active { transform: translateY(1px); }
-#settings-page .btn.accent, #settings-page .btn.blue {
-  background: var(--accent); border-color: var(--accent); color: #06121f;
-  box-shadow: 0 6px 18px -8px var(--accent), 0 1px 0 rgba(255, 255, 255, .25) inset;
+
+#settings-page .btn:hover,
+#settings-page button.btn:hover,
+#settings-page a.btn:hover,
+.ca-modal-box .btn:hover,
+.ca-modal-box button.btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--sp-line-strong)) !important;
+  background: var(--sp-tint) !important;
+  color: var(--text) !important;
+  transform: translateY(-1px);
 }
-#settings-page .btn.accent:hover, #settings-page .btn.blue:hover { background: color-mix(in srgb, var(--accent) 88%, #fff); }
-#settings-page .btn.ghost { background: transparent; }
-#settings-page .btn.red { background: rgba(244, 63, 94, .12); border-color: rgba(244, 63, 94, .45); color: #fb7185; }
-#settings-page .btn.red:hover { background: rgba(244, 63, 94, .22); }
-#settings-page .btn:focus-visible, #settings-page button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+#settings-page .btn:active,
+#settings-page button.btn:active,
+#settings-page a.btn:active,
+.ca-modal-box .btn:active,
+.ca-modal-box button.btn:active {
+  transform: translateY(1px);
+  box-shadow: none !important;
+}
+
+#settings-page .btn:focus-visible,
+#settings-page button:focus-visible,
+.ca-modal-box .btn:focus-visible,
+.ca-modal-box button:focus-visible {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px !important;
+}
+
+/* Primary / Accent Button */
+#settings-page .btn.primary,
+#settings-page .btn.accent,
+#settings-page .btn.blue,
+#settings-page .btn.btn-primary,
+.ca-modal-box .btn.primary,
+.ca-modal-box .btn.blue,
+.ca-modal-box .btn.accent {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #06121f !important;
+  font-weight: 600 !important;
+  box-shadow: 0 2px 10px -2px var(--accent-glow, rgba(56, 189, 248, 0.4)), 0 1px 0 rgba(255, 255, 255, .25) inset !important;
+}
+
+#settings-page .btn.primary:hover,
+#settings-page .btn.accent:hover,
+#settings-page .btn.blue:hover,
+#settings-page .btn.btn-primary:hover,
+.ca-modal-box .btn.primary:hover,
+.ca-modal-box .btn.blue:hover,
+.ca-modal-box .btn.accent:hover {
+  background: color-mix(in srgb, var(--accent) 88%, #ffffff) !important;
+  border-color: color-mix(in srgb, var(--accent) 88%, #ffffff) !important;
+  color: #06121f !important;
+  box-shadow: 0 4px 14px -2px var(--accent-glow, rgba(56, 189, 248, 0.55)), 0 1px 0 rgba(255, 255, 255, .3) inset !important;
+  transform: translateY(-1px);
+}
+
+/* Secondary / Default Button */
+#settings-page .btn.secondary,
+#settings-page .btn.btn-secondary,
+.ca-modal-box .btn.secondary,
+.ca-modal-box .btn.btn-secondary {
+  background: var(--sp-raised) !important;
+  border-color: var(--sp-line-strong) !important;
+  color: var(--text) !important;
+}
+
+#settings-page .btn.secondary:hover,
+#settings-page .btn.btn-secondary:hover,
+.ca-modal-box .btn.secondary:hover,
+.ca-modal-box .btn.btn-secondary:hover {
+  background: var(--sp-tint) !important;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--sp-line-strong)) !important;
+  color: var(--text) !important;
+  transform: translateY(-1px);
+}
+
+/* Ghost Button */
+#settings-page .btn.ghost,
+#settings-page .btn.btn-ghost,
+.ca-modal-box .btn.ghost,
+.ca-modal-box .btn.btn-ghost {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: var(--dim) !important;
+  box-shadow: none !important;
+  font-weight: 500 !important;
+}
+
+#settings-page .btn.ghost:hover,
+#settings-page .btn.btn-ghost:hover,
+.ca-modal-box .btn.ghost:hover,
+.ca-modal-box .btn.btn-ghost:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent) !important;
+  border-color: var(--sp-line) !important;
+  color: var(--text) !important;
+  transform: translateY(-1px);
+}
+
+/* Danger / Red Button */
+#settings-page .btn.red,
+#settings-page .btn.danger,
+#settings-page .btn.btn-danger,
+.ca-modal-box .btn.red,
+.ca-modal-box .btn.danger {
+  background: rgba(244, 63, 94, .12) !important;
+  border-color: rgba(244, 63, 94, .38) !important;
+  color: #fb7185 !important;
+  font-weight: 600 !important;
+  box-shadow: 0 1px 3px rgba(244, 63, 94, .15) !important;
+}
+
+#settings-page .btn.red:hover,
+#settings-page .btn.danger:hover,
+#settings-page .btn.btn-danger:hover,
+.ca-modal-box .btn.red:hover,
+.ca-modal-box .btn.danger:hover {
+  background: rgba(244, 63, 94, .22) !important;
+  border-color: #f43f5e !important;
+  color: #ffffff !important;
+  transform: translateY(-1px);
+}
+
+/* Compact / Small Button */
+#settings-page .btn.sm,
+#settings-page .btn.btn-sm,
+#settings-page .btn.vc-sm,
+#settings-page .btn.rt-sm,
+#settings-page .btn.cp-mini,
+.ca-modal-box .btn.sm {
+  min-height: 28px !important;
+  height: 28px !important;
+  padding: 0 11px !important;
+  font-size: 11.5px !important;
+  border-radius: 7px !important;
+  gap: 5px !important;
+}
+
+/* Extra Small Button (e.g. tool rows, table actions) */
+#settings-page .btn.xs {
+  min-height: 24px !important;
+  height: 24px !important;
+  padding: 0 8px !important;
+  font-size: 10.5px !important;
+  border-radius: 6px !important;
+  gap: 4px !important;
+}
+
+/* Action Footers Alignment Pattern */
+#settings-page .ap-actions,
+#settings-page .smp-footer,
+#settings-page .settings-panel-actions,
+#settings-page .settings-actions,
+#settings-page .cfg-actions,
+#settings-page .subagent-actions,
+#settings-page .section-footer,
+#settings-page .panel-actions,
+#settings-page .cp-foot,
+#settings-page .cp-form-foot,
+#settings-page .ca-modal-foot,
+#settings-page .am-actions {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 10px !important;
+  margin-top: 20px !important;
+  padding-top: 16px !important;
+  border-top: 1px solid var(--sp-line) !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  flex-wrap: wrap !important;
+}
+
+#settings-page .ap-actions > span:not(.btn),
+#settings-page .smp-footer > .smp-status,
+#settings-page .settings-panel-actions > span:not(.btn),
+#settings-page .settings-actions > span:not(.btn),
+#settings-page .subagent-actions > span:not(.btn),
+#settings-page .subagent-actions > div:first-child,
+#settings-page .am-actions > span:not(.btn),
+#settings-page .cp-foot > span:not(.btn) {
+  margin-right: auto !important;
+  font-size: 12px !important;
+  color: var(--dim) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+/* Speech panel specific overrides normalized to theme height */
+#settings-page #sec-speech .btn { margin: 0 !important; }
+#settings-page #sec-speech .btn.vc-inline { min-height: 0 !important; height: auto !important; padding: 0 4px !important; border: none !important; background: transparent !important; }
 
 #settings-page .switch .slider { border-radius: 999px; background: color-mix(in srgb, var(--text) 14%, transparent); }
 #settings-page .switch input:checked + .slider { background: var(--accent); box-shadow: 0 0 14px -2px var(--accent); }
@@ -211,19 +413,165 @@
 /* ---------------- header strip on the left ---------------- */
 #settings-page * { scrollbar-color: color-mix(in srgb, var(--text) 22%, transparent) transparent; }
 
-/* ---------------- narrow screens ---------------- */
+/* ---------------- narrow screens & full mobile responsiveness ---------------- */
 @media (max-width: 860px) {
-  #settings-page #settings-sidebar { width: 100%; background: var(--panel); border-right: 0; border-bottom: 1px solid var(--sp-line); }
-  #settings-page .settings-search-wrap { display: none; }
-  #settings-page .settings-group-label { display: none; }
-  #settings-page #settings-nav { flex-direction: row; overflow-x: auto; padding: 8px; gap: 6px; }
-  #settings-page .settings-tab-btn { width: auto; flex-shrink: 0; min-height: 36px; padding: 5px 12px 5px 6px; }
-  #settings-page .settings-tab-btn.active::before { display: none; }
+  #settings-page #settings-sidebar {
+    width: 100% !important;
+    background: var(--panel) !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--sp-line) !important;
+    flex-shrink: 0 !important;
+  }
+  #settings-page .settings-search-wrap { display: none !important; }
+  #settings-page .settings-group-label { display: none !important; }
+  #settings-page #settings-nav {
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    padding: 8px 10px !important;
+    gap: 6px !important;
+    scrollbar-width: none !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  #settings-page #settings-nav::-webkit-scrollbar { display: none; }
+  #settings-page .settings-tab-btn {
+    width: auto !important;
+    flex-shrink: 0 !important;
+    min-height: 36px !important;
+    height: 36px !important;
+    padding: 0 12px 0 8px !important;
+    border-radius: 9px !important;
+    font-size: 12px !important;
+  }
+  #settings-page .settings-tab-btn.active::before { display: none !important; }
+  #settings-page .settings-tab-btn.active {
+    border-color: var(--accent) !important;
+    background: var(--sp-tint-strong) !important;
+  }
   #settings-page .card.settings-panel { padding: 0 16px 22px; border-radius: 14px; }
   #settings-page .settings-panel > .settings-panel-head { margin: 0 -16px 18px; padding: 18px 16px 14px; }
   #settings-page .settings-panel > .settings-panel-head h2 { font-size: 21px; }
   #settings-page .settings-panel > .settings-panel-head h2 .sp-ico { width: 32px; height: 32px; font-size: 17px; }
   #settings-page .settings-panel > .settings-panel-head .sp-crumb { display: none; }
+}
+
+@media (max-width: 640px) {
+  html, body, #settings-page, #settings-layout {
+    max-width: 100vw !important;
+    width: 100vw !important;
+    overflow-x: hidden !important;
+  }
+  #settings-page {
+    height: 100dvh !important;
+    height: 100vh !important;
+  }
+  #settings-layout {
+    flex-direction: column !important;
+    height: 100% !important;
+    min-height: 0 !important;
+  }
+  #settings-content {
+    padding: 10px 10px 48px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  #settings-page .card.settings-panel {
+    padding: 0 10px 18px !important;
+    border-radius: 12px !important;
+  }
+  #settings-page .settings-panel > .settings-panel-head {
+    margin: 0 -10px 14px !important;
+    padding: 14px 10px 12px !important;
+  }
+  #settings-page .settings-panel > .settings-panel-head h2 {
+    font-size: 17px !important;
+  }
+  #settings-page .settings-panel > .settings-panel-head h2 .sp-ico {
+    width: 28px !important;
+    height: 28px !important;
+    font-size: 15px !important;
+  }
+
+  /* Form layouts */
+  #sec-theme .ap-set-row,
+  #sec-profile .ap-set-row,
+  #sec-password .ap-set-row {
+    grid-template-columns: 1fr !important;
+    gap: 6px !important;
+    padding: 10px 6px !important;
+  }
+  #sec-theme .ap-set-row > select,
+  #sec-profile .ap-set-row > input,
+  #sec-password .ap-set-row > input {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    justify-self: stretch !important;
+    box-sizing: border-box !important;
+  }
+  #sec-theme .ap-set-row .ap-segmented,
+  #sec-theme .ap-color-row {
+    justify-self: start !important;
+    flex-wrap: wrap !important;
+  }
+  #sec-profile .ap-profile-head {
+    flex-direction: column !important;
+    align-items: center !important;
+    text-align: center !important;
+    gap: 10px !important;
+  }
+
+  /* Grids and rows */
+  .settings-panel .cfg-grid,
+  .settings-panel .cfg-row3,
+  #settings-page .smp-grid,
+  #settings-page .theme-grid {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+  .settings-panel .cfg-item,
+  .settings-panel .cfg-span-2 {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    grid-column: 1 / -1 !important;
+  }
+
+  /* Tables */
+  .subagents-table-wrap,
+  .table-responsive {
+    width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    display: block !important;
+  }
+
+  /* Action Footers on mobile: full width clean alignment */
+  #settings-page .ap-actions,
+  #settings-page .smp-footer,
+  #settings-page .settings-actions,
+  #settings-page .subagent-actions,
+  #settings-page .ca-modal-foot {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+  #settings-page .ap-actions .btn,
+  #settings-page .smp-footer .btn,
+  #settings-page .settings-actions .btn,
+  #settings-page .subagent-actions .btn,
+  #settings-page .ca-modal-foot .btn {
+    width: 100% !important;
+    justify-content: center !important;
+  }
+  #settings-page .ap-actions > span,
+  #settings-page .smp-footer > .smp-status,
+  #settings-page .settings-actions > span,
+  #settings-page .subagent-actions > div:first-child {
+    margin-right: 0 !important;
+    text-align: center !important;
+    justify-content: center !important;
+    width: 100% !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -242,19 +242,17 @@
     align-items: center; gap: 14px; padding: 10px 12px;
   }
   #sec-theme .ap-set-row > select {
-    width: auto; min-width: 190px; max-width: 230px; justify-self: end;
-    padding: 5px 9px; font-size: 11.5px;
+    width: auto; min-width: 160px; max-width: 100%; justify-self: end;
+    padding: 6px 10px; font-size: 12px;
   }
   #sec-profile .ap-set-row > input, #sec-password .ap-set-row > input {
-    width: 100%; min-width: 240px; justify-self: stretch;
+    width: 100%; min-width: 0; justify-self: stretch;
     padding: 7px 10px; font-size: 12px;
   }
   #sec-profile .ap-set-row > span.mono { justify-self: stretch; padding: 7px 0; }
-  #sec-theme .ap-actions .btn, #sec-profile .ap-actions .btn, #sec-password .ap-actions .btn {
-    width: auto; min-width: 0; padding: 6px 14px; font-size: 11.5px;
-  }
   #sec-theme .ap-actions, #sec-profile .ap-actions, #sec-password .ap-actions {
-    display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 16px;
+    display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 18px;
+    padding-top: 14px; border-top: 1px solid var(--border-subtle);
   }
   #sec-password .settings-panel-head p.dim { max-width: none; white-space: nowrap; }
   #sec-password .ap-policy { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; margin: 10px 0 2px; padding: 0 12px 12px; font-size: 11.5px; color: var(--dim); }
@@ -270,8 +268,8 @@
   #sec-theme .ap-set-row + .ap-set-row, #sec-profile .ap-set-row + .ap-set-row, #sec-password .ap-set-row + .ap-set-row { border-top: 1px solid var(--border-subtle); }
   #sec-theme .ap-set-row > label { font-size: 12.5px; font-weight: 600; color: var(--text); }
   #sec-theme .ap-set-row select, #sec-theme .ap-set-row input[type="text"] {
-    min-width: 150px; padding: 4px 8px; border: 1px solid var(--border-subtle); border-radius: 6px;
-    background: var(--panel2); color: var(--text); font-size: 11.5px;
+    min-width: 140px; padding: 5px 8px; border: 1px solid var(--border-subtle); border-radius: 6px;
+    background: var(--panel2); color: var(--text); font-size: 12px;
   }
   #sec-theme .ap-color-row { display: inline-flex; align-items: center; gap: 7px; }
   #sec-theme .ap-color-row input[type="color"] { width: 26px; height: 24px; padding: 0; border: 1px solid var(--border-subtle); border-radius: 5px; background: transparent; cursor: pointer; }
@@ -401,40 +399,55 @@
     color: var(--dim);
   }
 
+  .subagents-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+  }
+
   @media (max-width: 768px) {
-    #settings-layout { flex-direction: column; }
+    html, body, #settings-page, #settings-layout {
+      max-width: 100vw;
+      width: 100vw;
+      overflow-x: hidden;
+    }
+    #settings-page { height: 100dvh; height: 100vh; }
+    #settings-layout { flex-direction: column; height: 100%; min-height: 0; }
     #settings-sidebar {
       width: 100%;
       height: auto;
       border-right: none;
       border-bottom: 1px solid var(--border-subtle);
+      flex-shrink: 0;
     }
-    .settings-search-wrap { display: none; }
-    .settings-group-label { display: none; }
+    .settings-search-wrap, .settings-group-label { display: none; }
     #settings-nav {
       flex-direction: row;
       overflow-x: auto;
+      overflow-y: hidden;
       flex-wrap: nowrap;
-      padding: 6px;
-      gap: 4px;
+      padding: 6px 8px;
+      gap: 6px;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
     }
+    #settings-nav::-webkit-scrollbar { display: none; }
     .settings-tab-btn {
       width: auto;
       flex-shrink: 0;
-      padding: 6px 10px;
-      font-size: 11px;
+      padding: 6px 12px;
+      font-size: 11.5px;
+      min-height: 34px;
     }
     #settings-content {
-      padding: 14px 14px 40px;
+      padding: 12px 12px 60px;
+      width: 100%;
+      box-sizing: border-box;
+      overflow-x: hidden;
     }
-  }
-
-  /* Phones: nothing may be wider than the screen. A 1fr grid column or a flex row sized by its input's own width pushed
-     fields (batch size, slots ...) and the card header past the right edge. */
-  @media (max-width: 768px) {
-    html, body, #settings-page, #settings-layout { max-width: 100vw; overflow-x: hidden; }
-    #settings-page { height: 100dvh; }
-    #settings-content { width: 100%; box-sizing: border-box; overflow-x: hidden; }
     .settings-panel, .settings-panel .card { max-width: 100%; box-sizing: border-box; min-width: 0; }
     .settings-panel .cfg-grid,
     .settings-panel .cfg-row3 { grid-template-columns: minmax(0, 1fr); }
@@ -442,9 +455,27 @@
     .settings-panel .cfg-span-2 { min-width: 0; max-width: 100%; grid-column: 1 / -1; }
     .settings-panel input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
     .settings-panel select,
-    .settings-panel textarea { max-width: 100%; width: 100%; }
+    .settings-panel textarea { max-width: 100%; width: 100%; box-sizing: border-box; }
     .settings-panel pre, .settings-panel code, .settings-panel table { max-width: 100%; overflow-x: auto; }
     .settings-panel-head h2 { font-size: 17px; overflow-wrap: anywhere; }
+
+    #sec-theme .ap-set-row, #sec-profile .ap-set-row, #sec-password .ap-set-row {
+      grid-template-columns: 1fr;
+      gap: 6px;
+      padding: 8px 6px;
+    }
+    #sec-theme .ap-set-row > select,
+    #sec-profile .ap-set-row > input,
+    #sec-password .ap-set-row > input {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      justify-self: stretch;
+    }
+    #sec-theme .ap-set-row .ap-segmented, #sec-theme .ap-color-row {
+      justify-self: start;
+      flex-wrap: wrap;
+    }
   }
 </style>
 </head>
@@ -544,7 +575,8 @@
         <button type="button" class="settings-tab-btn" data-tab="sec-speech" data-perm="speech.manage">
           <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg></span>
           <span class="tab-label">Voice Collection</span>
-        </button>        <button type="button" class="settings-tab-btn" data-tab="sec-runner" data-perm="users.manage">
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="sec-runner" data-perm="users.manage">
           <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/><path d="M7 15h10"/></svg></span>
           <span class="tab-label">Code Runner</span>
         </button>
@@ -756,9 +788,9 @@
         </div>
         <div class="cfg-note" title="Where these values apply">Applied to every chat and agent request you send.</div>
         <div class="smp-footer">
-          <button type="button" class="btn blue smp-btn" id="btn-save-sampling" title="Save sampling parameters">💾 Save Settings</button>
-          <button type="button" class="btn ghost smp-btn" id="btn-reset-sampling" title="Reset all sampling parameters to defaults">↺ Reset Defaults</button>
           <span id="sampling-save-status" class="mono smp-status" style="display:none;">✓ Saved</span>
+          <button type="button" class="btn secondary smp-btn" id="btn-reset-sampling" title="Reset all sampling parameters to defaults">↺ Reset Defaults</button>
+          <button type="button" class="btn primary smp-btn" id="btn-save-sampling" title="Save sampling parameters">💾 Save Settings</button>
         </div>
       </div>
 
@@ -978,7 +1010,7 @@
                 <h3 style="margin:0; font-size:14px; font-weight:700;">⚡ GPUs (Discrete)</h3>
                 <p class="dim" style="margin:2px 0 0; font-size:11px;">Dedicated VRAM usage &amp; compute engine utilization for discrete Arc A770 GPUs</p>
               </div>
-              <button type="button" id="btn-refresh-gpu" class="btn" style="width:auto; flex:none; margin:0 0 0 auto; padding:4px 12px; font-size:11px; height:26px; border-radius:6px; white-space:nowrap;" title="Query discrete GPU status on-demand">⚡ Check GPU</button>
+              <button type="button" id="btn-refresh-gpu" class="btn sm secondary" title="Query discrete GPU status on-demand">⚡ Check GPU</button>
             </div>
             <div id="gpu-list" style="margin-top:8px;"><div class="dim" style="font-size:12px">Click "⚡ Check GPU" or select tab to query status…</div></div>
             <div id="gpu-lane-vram" style="margin-top:4px;"></div>
@@ -1004,7 +1036,7 @@
             <div class="cfg-item"><label for="rt-small-gpu">Helper-model GPU</label><input id="rt-small-gpu" type="number" min="0"></div>
           </div>
           <div style="display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap;">
-            <button type="button" id="rt-save" class="btn">Save runtime</button>
+            <button type="button" id="rt-save" class="btn sm secondary">💾 Save runtime</button>
             <span id="rt-note" class="dim" style="font-size:11px;"></span>
           </div>
         </details>
@@ -1127,10 +1159,10 @@
           </div>
           <div class="cfg-item cfg-full" title="One share per GPU in use, in order. Equal numbers = even split · 0 skips that GPU (e.g. 0,1 = only the second GPU)">
             <label for="cfg-ts">Tensor split <span class="info" title="Comma-separated shares, one per GPU in use. 0 skips a GPU, so 0,1 uses only the second one; equal numbers split evenly">ⓘ</span></label>
-            <div id="cfg-ts-tools" style="display:flex; gap:6px; align-items:stretch;">
+            <div id="cfg-ts-tools" style="display:flex; gap:6px; align-items:stretch; flex-wrap:wrap;">
               <input type="text" id="cfg-ts" value="9,11" style="flex:1 1 auto; width:auto; min-width:0; margin:0;" title="One share per GPU in use; 0 skips a GPU">
-              <button type="button" class="btn" id="ts-auto" style="flex:0 0 auto; width:auto; white-space:nowrap; margin:0;" title="Shares proportional to each GPU's VRAM">Auto by VRAM</button>
-              <button type="button" class="btn" id="ts-equal" style="flex:0 0 auto; width:auto; white-space:nowrap; margin:0;" title="Same share on every GPU">Equal</button>
+              <button type="button" class="btn sm secondary" id="ts-auto" title="Shares proportional to each GPU's VRAM">Auto by VRAM</button>
+              <button type="button" class="btn sm secondary" id="ts-equal" title="Same share on every GPU">Equal</button>
             </div>
             <small style="color:var(--dim); font-size:9.5px; margin-top:3px; display:block;">One share per GPU, in order · 0 skips that GPU · e.g. 1,1,1 splits evenly over three</small>
             <div id="cfg-ts-rows" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:4px 12px; margin-top:6px;"></div>
@@ -1200,7 +1232,10 @@
         </div>
         </div>
         <div class="cfg-note" title="Configuration note">Saved per-model into config/model_configs.json. Unload the model, then load it again to apply changes.</div>
-        <button id="btn-apply" class="btn accent" style="margin-top:6px" title="Save configuration for this model. If the model is loaded, you will be asked to unload &amp; reload to apply.">💾 Save Config</button>
+        <div class="settings-actions">
+          <span id="cfg-apply-status" class="dim mono" style="display:none;">✓ Configuration saved</span>
+          <button id="btn-apply" class="btn primary" title="Save configuration for this model. If the model is loaded, you will be asked to unload &amp; reload to apply.">💾 Save Config</button>
+        </div>
       </div>
 
       <!-- Section 6: Cloud Models -->
@@ -1236,7 +1271,7 @@
             <p class="dim">All your agents, on every device. The sidebar shows only the ones bound to this device; fork one to use it here.</p>
         </div>
         <div id="settings-agents-content" class="settings-agents-grid">
-          <button type="button" class="btn blue" id="btn-create-agent-settings" style="width:auto; flex:none; margin:0; padding:9px 16px; font-size:12px; white-space:nowrap; border-radius:8px; font-weight:600;">＋ New Custom Agent</button>
+          <button type="button" class="btn primary" id="btn-create-agent-settings">＋ New Custom Agent</button>
           <div class="mon-empty">Loading custom agents…</div>
         </div>
       </div>
@@ -1258,8 +1293,9 @@
           <p class="dim">Configure runtime execution limits, timeouts, and parallel concurrency for delegated agent tasks.</p>
         </div>
 
-        <div style="padding: 16px 20px;">
-          <table class="subagents-table" style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+        <div style="padding: 14px 4px;">
+          <div class="subagents-table-wrap">
+          <table class="subagents-table" style="width: 100%; border-collapse: collapse; min-width: 520px;">
             <thead>
               <tr style="border-bottom: 1px solid var(--border, rgba(255,255,255,0.1)); text-align: left;">
                 <th style="padding: 10px 12px; font-size: 13px; font-weight: 600;">Parameter</th>
@@ -1318,13 +1354,12 @@
               </tr>
             </tbody>
           </table>
+          </div>
 
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 16px;">
-            <div id="subagent-save-status" style="font-size: 13px; color: var(--dim, #8b949e);"></div>
-            <div style="display: flex; gap: 10px;">
-              <button type="button" class="btn btn-secondary" id="subagent-reset-btn">Reset to Defaults</button>
-              <button type="button" class="btn btn-primary" id="subagent-save-btn">Save Subagent Settings</button>
-            </div>
+          <div class="subagent-actions">
+            <div id="subagent-save-status" class="dim" style="font-size: 12px; margin-right: auto;"></div>
+            <button type="button" class="btn secondary" id="subagent-reset-btn">↺ Reset to Defaults</button>
+            <button type="button" class="btn primary" id="subagent-save-btn">💾 Save Subagent Settings</button>
           </div>
         </div>
       </div>
@@ -1410,7 +1445,7 @@
           <div id="settings-db-summary" style="display:flex; flex-direction:column; gap:6px; margin-bottom:12px;">
             <div class="dim" style="font-size:11px;">Loading databases…</div>
           </div>
-          <a href="/#db" class="btn accent" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; width:auto; padding:6px 14px; font-size:12px;" data-open-db>🗄️ Open Database Explorer Console</a>
+          <a href="/#db" class="btn primary" style="text-decoration:none;" data-open-db>🗄️ Open Database Explorer Console</a>
         </div>
       </div>
 
@@ -1435,9 +1470,9 @@
           <textarea id="fetch-allow-cidrs" rows="5" class="mono" spellcheck="false"
                     style="width:100%; box-sizing:border-box; margin-top:6px; font-size:12px; padding:8px;"
                     placeholder="192.168.59.0/24"></textarea>
-          <div style="display:flex; gap:8px; margin-top:8px;">
-            <button id="btn-fetch-allow-save" class="btn primary" type="button">Save Allowed Ranges</button>
-            <span id="fetch-allow-status" class="dim" style="font-size:12px; align-self:center;"></span>
+          <div class="settings-actions">
+            <span id="fetch-allow-status" class="dim" style="font-size:12px; margin-right:auto;"></span>
+            <button id="btn-fetch-allow-save" class="btn primary" type="button">💾 Save Allowed Ranges</button>
           </div>
         </div>
       </div>
@@ -1455,8 +1490,10 @@
             the organizational knowledge base, user accounts, and audit log are not affected.
             This cannot be undone.
           </p>
-          <button id="btn-clear-all-data" class="btn red" type="button">🗑️ Clear All Chat / Project Data</button>
-          <div id="clear-all-data-result" class="dim mono" style="font-size:11px; margin-top:8px;"></div>
+          <div class="settings-actions" style="border-top-color: rgba(244, 63, 94, 0.25);">
+            <div id="clear-all-data-result" class="dim mono" style="font-size:11px; margin-right:auto;"></div>
+            <button id="btn-clear-all-data" class="btn danger" type="button">🗑️ Clear All Chat / Project Data</button>
+          </div>
         </div>
       </div>
     </main>
@@ -1552,7 +1589,7 @@
         <label for="ca-workdir">Work folder on your computer (Optional)</label>
         <div style="display:flex; gap:6px;">
           <input type="text" id="ca-workdir" placeholder="D:/reports/weekly" autocomplete="off" spellcheck="false" style="flex:1;">
-          <button type="button" class="ca-browse" id="ca-workdir-browse"><span aria-hidden="true">📁</span> Browse…</button>
+          <button type="button" class="btn sm secondary" id="ca-workdir-browse"><span aria-hidden="true">📁</span> Browse…</button>
         </div>
         <span class="ca-field-hint">With a folder set, this agent can read, write and analyse files there when you chat with it in the desktop app, and repeat the same task from the same place every time. It cannot leave the folder. Without one it only chats. The folder is private to you and is never shared or copied to forks.</span>
       </div>
@@ -1562,9 +1599,9 @@
       </div>
     </div>
     <div class="ca-modal-foot">
-      <button type="button" class="btn red" id="ca-btn-delete" style="display:none; margin-right:auto;">Delete Agent</button>
+      <button type="button" class="btn danger" id="ca-btn-delete" style="display:none; margin-right:auto;">🗑️ Delete Agent</button>
       <button type="button" class="btn ghost" id="ca-btn-cancel">Cancel</button>
-      <button type="button" class="btn blue" id="ca-btn-save">Save Agent</button>
+      <button type="button" class="btn primary" id="ca-btn-save">💾 Save Agent</button>
     </div>
   </div>
 </div>
@@ -1597,14 +1634,14 @@
         <label for="ca-fork-workdir" style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:5px;">Workspace Path on This Device *</label>
         <div style="display:flex; gap:6px;">
           <input type="text" id="ca-fork-workdir" placeholder="e.g. D:\Projects\MyWorkspace or C:\Users\..." style="flex:1; box-sizing:border-box;">
-          <button type="button" class="btn secondary" id="ca-fork-browse-btn" style="width:auto; padding:6px 12px; white-space:nowrap;">Browse…</button>
+          <button type="button" class="btn sm secondary" id="ca-fork-browse-btn">Browse…</button>
         </div>
         <div style="font-size:10.5px; color:var(--dim); margin-top:4px;">Select the directory where this agent will read, write, and execute tasks on this machine.</div>
       </div>
     </div>
-    <div class="ca-modal-foot" style="display:flex; justify-content:flex-end; gap:8px; padding:12px 20px; border-top:1px solid var(--border-subtle, rgba(255,255,255,0.08));">
+    <div class="ca-modal-foot">
       <button type="button" class="btn ghost" id="ca-fork-cancel-btn">Cancel</button>
-      <button type="button" class="btn blue" id="ca-fork-submit-btn">Fork &amp; Bind to Device</button>
+      <button type="button" class="btn primary" id="ca-fork-submit-btn">Fork &amp; Bind to Device</button>
     </div>
   </div>
 </div>

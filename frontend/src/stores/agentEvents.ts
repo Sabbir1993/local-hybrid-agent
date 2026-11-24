@@ -21,6 +21,7 @@ export interface AgentRunCtx {
     update: (key: string, patch: Record<string, unknown>) => void;
     activate: () => void;
   };
+  onScreenshot?: (shotPath: string) => void;
 }
 
 /** Per-run scratch state that is not part of the saved message. */
@@ -340,6 +341,12 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       if (FILE_TOOLS.includes(d.name) && d.ok === false) {
         const p = d.args && (d.args.path || d.args.file || d.args.filename);
         toast(`⚠️ Failed to write ${p ? String(p).split(/[\\/]/).pop() : 'file'}`, 'error');
+      }
+      if (d.name === 'browser_screenshot' || d.name === 'mobile_screenshot') {
+        const shotImg = d.image || (typeof d.result === 'string' ? d.result.match(/saved:\s*([^\s()]+\.png)/i)?.[1] : null);
+        if (shotImg) {
+          ctx.onScreenshot?.(shotImg);
+        }
       }
       break;
     }

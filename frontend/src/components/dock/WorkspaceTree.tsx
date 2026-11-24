@@ -343,6 +343,17 @@ export const WorkspaceTree: React.FC = () => {
           <span id="ws-file-badge" className={badgeClass} title="Session change status">
             {file.changed ? (file.status === 'created' ? 'created' : 'modified') : 'unchanged'}
           </span>
+          {file.changed && file.diff && (() => {
+            const added = file.diff.filter((l) => l.t === '+').length;
+            const removed = file.diff.filter((l) => l.t === '-').length;
+            if (added === 0 && removed === 0) return null;
+            return (
+              <span className="ct-diff-stat" style={{ marginLeft: 6 }}>
+                {added > 0 && <span className="ct-diff-add">+{added}</span>}
+                {removed > 0 && <span className="ct-diff-del">-{removed}</span>}
+              </span>
+            );
+          })()}
         </div>
         <div id="ws-file-code" className="ws-monaco-wrap">
           <Editor

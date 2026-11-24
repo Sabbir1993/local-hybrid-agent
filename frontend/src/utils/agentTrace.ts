@@ -13,6 +13,7 @@ export interface TraceItem {
   failed: boolean;
   running: boolean;
   isThought?: boolean;
+  image?: string;
   text?: string;
   duration_s?: number;
   subagents?: Record<string, any>;
@@ -100,6 +101,52 @@ function matchCount(result: unknown): string {
   return `${lines.length} match${lines.length === 1 ? '' : 'es'} in ${filesHit.size} file${filesHit.size === 1 ? '' : 's'}`;
 }
 
+function diffStatsHtml(t: TraceItem): string {
+  const a = t.args || {};
+  let added = 0;
+  let removed = 0;
+
+  if (t.name === 'edit_file' || t.name === 'doc_edit') {
+    if (typeof a.old_string === 'string' && typeof a.new_string === 'string') {
+      removed = a.old_string ? a.old_string.split('\n').length : 0;
+      added = a.new_string ? a.new_string.split('\n').length : 0;
+    } else if (typeof a.diff === 'string' || typeof a.patch === 'string') {
+      const diffText = String(a.diff || a.patch || '');
+      const lines = diffText.split('\n');
+      for (const l of lines) {
+        if (l.startsWith('+') && !l.startsWith('+++')) added++;
+        else if (l.startsWith('-') && !l.startsWith('---')) removed++;
+      }
+    }
+  } else if (t.name === 'write_file' || t.name === 'write_file_common' || t.name === 'project_write' || t.name === 'doc_create') {
+    const c = typeof a.content === 'string' ? a.content : '';
+    if (c) added = c.split('\n').length;
+  } else if (t.name === 'append_file' || t.name === 'project_append' || t.name === 'doc_append') {
+    const c = typeof a.content === 'string' ? a.content : '';
+    if (c) added = c.split('\n').length;
+  } else if (t.name === 'insert_at_line') {
+    const txt = typeof a.text === 'string' ? a.text : '';
+    if (txt) added = txt.split('\n').length;
+  }
+
+  if (added === 0 && removed === 0 && typeof t.result === 'string') {
+    const m = t.result.match(/\+(\d+)\s*-\s*(\d+)/) ||
+              t.result.match(/(\d+)\s*insertion[s]?.*?(?:,\s*(\d+)\s*deletion[s]?)?/i);
+    if (m) {
+      added = parseInt(m[1] || '0', 10);
+      removed = parseInt(m[2] || '0', 10);
+    }
+  }
+
+  if (added === 0 && removed === 0) return '';
+
+  let h = '<span class="ct-diff-stat">';
+  if (added > 0) h += `<span class="ct-diff-add">+${added}</span>`;
+  if (removed > 0) h += `<span class="ct-diff-del">-${removed}</span>`;
+  h += '</span>';
+  return h;
+}
+
 /** One row: verb + target (+ a muted detail). Everything escaped. */
 function rowHtml(t: TraceItem): string {
   const a = t.args || {};
@@ -134,6 +181,8 @@ function rowHtml(t: TraceItem): string {
       verb = 'Fetched'; target = strong(a.title || a.url); break;
     case 'search_knowledge_base': case 'kb_query': case 'kb_sql': case 'kb_find_mentions':
       verb = 'Searched the knowledge base'; target = a.query ? strong(a.query) : ''; break;
+    case 'browser_screenshot': case 'mobile_screenshot':
+      verb = 'Captured'; target = strong('Screenshot'); note = '📷'; break;
     default: {
       verb = (t.name || 'tool').replace(/_/g, ' ');
       verb = verb.charAt(0).toUpperCase() + verb.slice(1);
@@ -143,6 +192,8 @@ function rowHtml(t: TraceItem): string {
   }
   let h = `<span class="ct-verb">${escText(verb)}</span>`;
   if (target) h += ` ${target}`;
+  const diffBadge = diffStatsHtml(t);
+  if (diffBadge) h += ` ${diffBadge}`;
   if (note) h += `<span class="ct-note"> · ${escText(note)}</span>`;
   return h;
 }
@@ -498,6 +549,33 @@ function drawerHtml(t: TraceItem): string {
     h += `<div class="ct-drawer-file"><span class="ct-mono">${pa}</span>${dl}</div>`;
   }
 
+  // Render screenshot if captured (browser_screenshot or mobile_screenshot)
+  const screenImg = t.image || (typeof t.result === 'string' ? t.result.match(/saved:\s*([^\s()]+\.png)/i)?.[1] : null);
+  if (t.image) {
+    h += `<div class="ct-screenshot-preview" style="margin: 8px 0 12px 0;">
+      <div class="ct-label" style="display:flex; align-items:center; gap:6px;">
+        <span>📷 Captured Screenshot</span>
+        <span style="font-size:10px; text-transform:none; opacity:0.7;">(click to view in dock)</span>
+      </div>
+      <div style="cursor: pointer; display: inline-block; max-width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid var(--border);"
+           data-preview-path="${escAttr(t.image)}" data-preview-title="Browser Screenshot">
+        <img src="${escAttr(t.image)}" alt="Captured Screenshot" style="max-width: 100%; max-height: 380px; display: block; object-fit: contain; background: #0a0a0c;" />
+      </div>
+    </div>`;
+  } else if (screenImg) {
+    const rawUrl = `/agent/ws/raw?path=${encodeURIComponent(screenImg)}`;
+    h += `<div class="ct-screenshot-preview" style="margin: 8px 0 12px 0;">
+      <div class="ct-label" style="display:flex; align-items:center; gap:6px;">
+        <span>📷 Captured Screenshot</span>
+        <span style="font-size:10px; text-transform:none; opacity:0.7;">(click to view in dock)</span>
+      </div>
+      <div style="cursor: pointer; display: inline-block; max-width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid var(--border);"
+           data-preview-path="${escAttr(screenImg)}" data-preview-source="ws" data-preview-title="Browser Screenshot">
+        <img src="${escAttr(rawUrl)}" alt="Captured Screenshot" style="max-width: 100%; max-height: 380px; display: block; object-fit: contain; background: #0a0a0c;" />
+      </div>
+    </div>`;
+  }
+
   // If this is a subagent tool call, render the rich Subagent Dashboard!
   if (t.name === 'spawn_parallel_agents' || t.name === 'spawn_agent' || t.name === 'spawn_reviewed_coder') {
     const subHtml = renderSubagentViewHtml(t);
@@ -576,6 +654,7 @@ export function traceSegments(acts: any[]): Segment[] {
       it.result = a.result;
       it.running = false;
       if (a.subagents) it.subagents = a.subagents;
+      if (a.image) it.image = a.image;
       // the server's verdict decides; only older stored steps without `ok` fall back to an "error..." result
       it.failed = a.ok === false || (a.ok === undefined && typeof a.result === 'string' && /^\s*error\b/i.test(a.result));
     }
@@ -587,19 +666,17 @@ export function traceSegments(acts: any[]): Segment[] {
  * HTML for the whole trace. `prose` turns a narration into sanitized markdown (passed in so this file stays free of
  * the markdown setup). `live`: the reply is still streaming, so the newest group stays open.
  */
-export function renderAgentTraceHtml(acts: any[], prose: (md: string) => string, live = false, workedFor = '', collapsed = false): string {
+export function renderAgentTraceHtml(acts: any[], prose: (md: string) => string, live = false, workedFor = '', _collapsed = true): string {
   const segs = traceSegments(acts || []);
   if (!segs.length) return '';
-  const lastGroup = segs.map((s) => s.kind).lastIndexOf('group');
   let h = '<div class="ct-trace">';
   if (workedFor && !live) h += `<div class="ct-worked">${escText(workedFor)}</div>`;
-  segs.forEach((s, i) => {
+  segs.forEach((s) => {
     if (s.kind === 'prose') {
       h += `<div class="ct-prose">${prose(s.text)}</div>`;
     } else if (s.items.length) {
-      // Live streaming keeps latest active group open; finished tool groups default collapsed
-      const shouldOpen = !collapsed && live && (i === lastGroup);
-      h += groupHtml(s.items, shouldOpen);
+      // Tool groups default collapsed by default, including during live streaming response
+      h += groupHtml(s.items, false);
     }
   });
   return h + '</div>';

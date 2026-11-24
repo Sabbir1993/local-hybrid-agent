@@ -396,7 +396,7 @@ export function renderCompleteChatMessage(content: string, acts?: any[], secs?: 
       const prose = (md: string) => sanitizeHtml(marked.parse(transformMarkdownSpecialTokens(md), { async: false }) as string);
       actsHtml = renderAgentTraceHtml(finalActs, prose, live,
         finalActs.some((a) => a.type === 'tool_call') ? buildAntigravityWorkedFor(finalActs, secs) : '',
-        /* collapsed */ isChatMode && verboseSteps);
+        /* collapsed */ true);
     }
   }
 
