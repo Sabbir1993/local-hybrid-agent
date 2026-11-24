@@ -32,7 +32,9 @@ export const SettingsModal: React.FC = () => {
   if (!isOpen) return null;
 
   const targetTab = settingsTab ? (settingsTab.startsWith('sec-') ? settingsTab : `sec-${settingsTab}`) : 'sec-theme';
-  const iframeUrl = `/settings#${targetTab}`;
+  // frame=1 makes Vite proxy this to the backend's standalone settings.html,
+  // avoiding a recursive load of the React app inside the modal.
+  const iframeUrl = `/settings?frame=1#${targetTab}`;
 
   const handleBackToChat = () => {
     if (window.location.pathname === '/settings' || window.location.hash.includes('settings')) {

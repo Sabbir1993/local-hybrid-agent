@@ -7,6 +7,21 @@ const BACKEND_WS = 'ws://127.0.0.1:8000';
 
 let mode = 'production';
 
+// Frontend-owned routes must be served by the SPA shell on a hard refresh.
+// Without this, /settings is proxied to the backend, which 404s and redirects to "/",
+// so the Settings view (and its nav bar) disappears after refresh.
+const spaBypass = (req: any) => {
+  const full = String(req.url || '');
+  const url = full.split('?')[0];
+  // The Settings modal loads the legacy settings.html inside an iframe via
+  // /settings?frame=1 — that request must still be proxied to the backend.
+  if (full.includes('frame=1')) return undefined;
+  if (['/settings', '/login', '/report', '/audit', '/docs'].includes(url) ||
+      (req.headers?.accept || '').includes('text/html')) {
+    return '/index.html';
+  }
+};
+
 const proxyConfig = {
   '/auth': { target: BACKEND_URL, changeOrigin: true },
   '/control': { target: BACKEND_URL, changeOrigin: true },
@@ -40,9 +55,9 @@ const proxyConfig = {
   '/companion': { target: BACKEND_URL, changeOrigin: true },
   '/v1': { target: BACKEND_URL, changeOrigin: true },
   '/static': { target: BACKEND_URL, changeOrigin: true },
-  '/settings': { target: BACKEND_URL, changeOrigin: true },
-  '/login': { target: BACKEND_URL, changeOrigin: true },
-  '/docs': { target: BACKEND_URL, changeOrigin: true },
+  '/settings': { target: BACKEND_URL, changeOrigin: true, bypass: spaBypass },
+  '/login': { target: BACKEND_URL, changeOrigin: true, bypass: spaBypass },
+  '/docs': { target: BACKEND_URL, changeOrigin: true, bypass: spaBypass },
   '/ws': {
     target: BACKEND_WS,
     ws: true,
