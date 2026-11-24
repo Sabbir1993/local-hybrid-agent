@@ -54,17 +54,18 @@ TEXT_EXTS = {
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
 
 
-def _chunk_text(text: str, max_chunks: int = MAX_CHUNKS_PER_DOC) -> list:
+def _chunk_text(text: str, max_chunks: int = MAX_CHUNKS_PER_DOC,
+                chunk_chars: int = CHUNK_CHARS, chunk_overlap: int = CHUNK_OVERLAP) -> list:
     text = text.strip()
     if not text:
         return []
-    if len(text) <= CHUNK_CHARS:
+    if len(text) <= chunk_chars:
         return [text]
     chunks = []
-    step = CHUNK_CHARS - CHUNK_OVERLAP
+    step = max(1, chunk_chars - chunk_overlap)
     i = 0
     while i < len(text) and len(chunks) < max_chunks:
-        end = min(i + CHUNK_CHARS, len(text))
+        end = min(i + chunk_chars, len(text))
         tail = end >= len(text)
         if CHUNK_SNAP and not tail:
             end = _snap_cut(text, i, end)
@@ -74,7 +75,7 @@ def _chunk_text(text: str, max_chunks: int = MAX_CHUNKS_PER_DOC) -> list:
         if tail:
             break
         if CHUNK_SNAP:
-            i = max(end - CHUNK_OVERLAP, i + 1)
+            i = max(end - chunk_overlap, i + 1)
         else:
             i += step
     return chunks

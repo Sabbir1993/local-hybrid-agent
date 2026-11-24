@@ -77,8 +77,8 @@ export const SettingsModal: React.FC = () => {
   return (
     <div
       id="settings-page"
-      className="fixed inset-0 z-50 flex flex-col w-screen h-screen bg-bg select-none"
-      style={{ width: '100vw', height: '100vh', margin: 0, padding: 0 }}
+      className="fixed inset-0 z-50 flex flex-col w-screen h-dvh bg-bg select-none"
+      style={{ width: '100vw', height: '100dvh', margin: 0, padding: 0 }}
     >
       {/* Top Header Bar with Back to Chat */}
       <div

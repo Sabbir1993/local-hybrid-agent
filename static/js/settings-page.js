@@ -320,10 +320,10 @@ async function loadDevicesPanel() {
     if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
     const fmt = t => t ? new Date(t * 1000).toLocaleString() : '—';
     const rows = (d.devices || []).map(x => `
-      <div class="cap-item" style="display:flex; gap:10px; align-items:center; font-size:12px;">
+      <div class="cap-item" style="display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; font-size:12px; min-width:0;">
         <span class="cap-dot ${x.connected ? 'on' : ''}" title="${x.connected ? 'connected now' : 'not connected'}"></span>
         <b>${esc(x.name)}</b>
-        ${isAdmin ? `<span class="dim">${esc(x.username || x.user_id)}</span>` : ''}
+        ${isAdmin ? `<span class="dim" style="overflow-wrap:anywhere;">${esc(x.username || x.user_id)}</span>` : ''}
         <span class="dim">paired ${esc(fmt(x.created_at))}</span>
         <span class="dim">last seen ${esc(fmt(x.last_seen_at))}</span>
         <span style="margin-left:auto;">${x.revoked_at ? 'revoked' : ''}</span>

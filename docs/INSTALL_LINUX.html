@@ -389,6 +389,8 @@
     <tr><td>Qwen2.5-VL 3B Instruct Q4_K_M<small><code>Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf</code></small></td><td>Reads pictures and screenshots</td><td><span class="pill">vision</span></td><td><a href="https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf">ggml-org/Qwen2.5-VL-3B-Instruct-GGUF</a></td><td class="sz">1.9 GB</td></tr>
     <tr><td>Qwen2.5-VL 3B projector f16<small>saved as <code>mmproj-model-f16.gguf</code></small></td><td>Picture part of the model above</td><td><span class="pill">vision</span></td><td><a href="https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf">.../mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf</a></td><td class="sz">1.3 GB</td></tr>
     <tr><td>nomic-embed-text v1.5 Q8_0<small><code>nomic-embed-text-v1.5-Q8_0.gguf</code></small></td><td>Memory and knowledge-base search</td><td><span class="pill">embedder</span></td><td><a href="https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf">nomic-ai/nomic-embed-text-v1.5-GGUF</a></td><td class="sz">146 MB</td></tr>
+    <tr><td>bge-m3 Q8_0 (optional bilingual upgrade)<small><code>bge-m3-Q8_0.gguf</code></small></td><td>English + Bengali cross-lingual knowledge-base search</td><td><span class="pill opt">embedder</span></td><td><a href="https://huggingface.co/models?search=bge-m3-GGUF">BAAI/bge-m3 (GGUF)</a></td><td class="sz">635 MB</td></tr>
+    <tr><td>bge-reranker-v2-m3 (optional)<small><code>rerankers/bge-reranker-v2-m3/</code></small></td><td>Cross-Encoder reranker for precision retrieval (ONNX or HTTP)</td><td><span class="pill opt">reranker</span></td><td><a href="https://huggingface.co/BAAI/bge-reranker-v2-m3">BAAI/bge-reranker-v2-m3</a></td><td class="sz">~560 MB</td></tr>
     <tr><td>Whisper large-v3 turbo q5_0<small><code>voice-models/ggml-large-v3-turbo-q5_0.bin</code></small></td><td>Speech to text, fast</td><td><span class="pill opt">voice</span></td><td><a href="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin">ggerganov/whisper.cpp</a></td><td class="sz">574 MB</td></tr>
     <tr><td>Whisper large-v3<small><code>voice-models/ggml-large-v3.bin</code></small></td><td>Speech to text, most accurate</td><td><span class="pill opt">voice</span></td><td><a href="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin">ggerganov/whisper.cpp</a></td><td class="sz">3.1 GB</td></tr>
     <tr><td>Piper English voice (lessac, medium)<small>unpack into <code>voice-models/tts/</code></small></td><td>Spoken replies, English</td><td><span class="pill opt">voice</span></td><td><a href="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium.tar.bz2">k2-fsa/sherpa-onnx tts-models</a></td><td class="sz">65 MB</td></tr>
@@ -507,6 +509,7 @@
     <li><code>"common_dir"</code>: a folder for users' generated files and uploads, for example <code>/home/[USER]/common</code> (made in step 10)</li>
     <li><code>"runtime"</code>: <code>"vulkan"</code>, <code>"cuda"</code> for NVIDIA, or <code>"sycl"</code> after step 16</li>
     <li>Under <code>"runtimes"</code> then <code>"vulkan"</code>: <code>"llama_bin_dir"</code> is the folder that holds <code>llama-server</code> (step 6). Set <code>"gpu_devices"</code> to <code>"auto"</code> to use every card found, or to <code>[0]</code>. With one card, every GPU number in the settings must be <code>0</code>.</li>
+    <li>Optional Knowledge Base tuning under <code>"knowledge"</code>: set <code>"reranker": {"endpoint": "http://127.0.0.1:8094/v1/rerank"}</code> (or <code>"onnx_path"</code> if running ONNX locally) to enable Cross-Encoder reranking, and <code>"auto_inject_cos": 0.55</code>.</li>
   </ul>
 <pre class="plain"><code>"models_dir": "/home/[USER]/Models",
 "common_dir": "/home/[USER]/common",
@@ -936,6 +939,7 @@ Environment=LD_LIBRARY_PATH=/opt/intel/oneapi/umf/[UMF_VERSION]/lib:/opt/intel/o
   <h3>Updating later</h3>
 <pre><code>cd ~/a770-dual-runtime &amp;&amp; git pull &amp;&amp; .venv/bin/python -m pip install -r requirements.txt</code></pre>
   <p>Then restart the service (<code>sudo systemctl restart a770</code>) or stop and start the terminal copy.</p>
+  <div class="note"><p><strong>Knowledge Base schema &amp; reindex note:</strong> On restart, <code>memory.db</code> automatically migrates the <code>parent_text</code> column and split cache triggers. After pulling, open <em>Knowledge Base</em> as an admin and run <strong>Reindex outdated</strong> (or <code>POST /knowledge/reindex-outdated</code>) so existing PDFs and tables gain parent-child chunking.</p></div>
 </section>
 
 </main>

@@ -66,15 +66,16 @@ def _build_cache(entries: list, gen=None) -> dict:
             keep = [i for i, e in enumerate(entries) if e[3] is not None and len(e[3]) == dim]
             mat = _np.vstack([_np.asarray(entries[i][3], dtype=_np.float32) for i in keep])
             norms = _np.linalg.norm(mat, axis=1)
-            mat = (mat / _np.maximum(norms, 1e-9)[:, None]).astype(_np.float32)
+            mat = (mat / _np.maximum(norms, 1e-9)[:, None])
             mat[norms <= 1e-9] = 0.0
+            mat = mat.astype(_np.float16)
             pos = _np.full(len(entries), -1, dtype=_np.int64)
             pos[keep] = _np.arange(len(keep))
             built.update(dim=dim, mat=mat, pos=pos)
     return built
 
 
-_TERM_CACHE_MAX = 32          # query words whose per-row counts are kept (int32 per row each)
+_TERM_CACHE_MAX = 256         # query words whose per-row counts are kept (int32 per row each)
 
 
 def _term_counts(cache: dict, word: str):
@@ -124,7 +125,8 @@ def _cosines(cache: dict, idxs: list, qvec) -> list:
         out = _np.zeros(len(idxs), dtype=_np.float32)
         has = pos >= 0
         if has.any():
-            out[has] = cache["mat"][pos[has]] @ (q / qn)
+            q_unit = (q / qn).astype(cache["mat"].dtype)
+            out[has] = (cache["mat"][pos[has]] @ q_unit).astype(_np.float32)
         return out.tolist()
     out = []
     for i in idxs:

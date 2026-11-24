@@ -353,9 +353,9 @@ async function loadApiTokens(box, users) {
        <input type="checkbox" class="tok-perm" value="${esc(p)}"${p === 'chat.use' ? ' checked' : ''}> ${esc(p)}</label>`).join('');
   const rows = (data.tokens || []).map(t => {
     const state = t.revoked_at ? 'revoked' : (t.expires_at <= now ? 'expired' : 'active');
-    return `<div style="display:flex; gap:8px; align-items:center; font-size:11px; padding:4px 0; border-bottom:1px solid var(--border);">
+    return `<div style="display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; font-size:11px; padding:8px 0; border-bottom:1px solid var(--border); min-width:0;">
       <code>${esc(t.prefix)}…</code><b>${esc(t.name)}</b>
-      <span class="dim">user: ${esc(t.email || t.username || t.user_id)}</span>
+      <span class="dim" style="overflow-wrap:anywhere;">user: ${esc(t.email || t.username || t.user_id)}</span>
       <span class="dim">expires ${esc(fmt(t.expires_at))}</span>
       <span class="dim">last used ${esc(fmt(t.last_used_at))}</span>
       <span class="dim" title="${esc((t.permissions || []).join(', '))}">${esc((t.permissions || []).length)} perm(s)</span>

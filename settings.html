@@ -295,6 +295,9 @@
   #sec-cfg .emr-note:empty { display: none; }
   @media (max-width: 700px) {
     #sec-cfg .emr-engine, #sec-cfg .emr-model { flex: 1 1 100%; }
+    #sec-cfg .emr-model .model-group { height: auto; min-height: 38px; }
+    #sec-cfg .model-picker-btn { flex-wrap: wrap; min-width: 0; padding: 6px 10px; gap: 4px 7px; height: auto; min-height: 38px; }
+    #sec-cfg .model-picker-btn .mpi-caps { margin-left: 0; flex-wrap: wrap; justify-content: flex-start; }
   }
 
   /* Capabilities & MCP collapsible styling */
@@ -314,7 +317,7 @@
     background: rgba(255,255,255,0.015); margin-bottom: 6px; overflow: hidden;
   }
   details.mcp-server-fold > summary.mcp-server-head {
-    display: flex; align-items: center; gap: 6px;
+    display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
     padding: 6px 8px; cursor: pointer; user-select: none;
     font-size: 11px; list-style: none; background: transparent; transition: background .12s ease;
   }
@@ -411,12 +414,16 @@
   @media (max-width: 768px) {
     html, body, #settings-page, #settings-layout {
       max-width: 100vw;
-      width: 100vw;
-      overflow-x: hidden;
+      width: 100%;
+      overflow: hidden;
     }
-    #settings-page { height: 100dvh; height: 100vh; }
+    html, body { height: 100%; }
+    #settings-page { height: 100%; }
     #settings-layout { flex-direction: column; height: 100%; min-height: 0; }
     #settings-sidebar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
       width: 100%;
       height: auto;
       border-right: none;

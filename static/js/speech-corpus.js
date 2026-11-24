@@ -316,8 +316,8 @@ async function loadSpeechStats(box) {
   const cats = (d.by_category || []).map((x) => `${esc(x.category)}: ${x.clips} clips / ${x.hours} h`).join(' · ');
   out.innerHTML = `
     <div>${d.speakers} speakers · ${d.clips} clips · ${d.hours} hours · ${d.prompts_active} lines (${d.prompts_unrecorded} not recorded yet)${d.flagged ? ` · ${d.flagged} flagged` : ''}</div>
-    ${rows ? `<table style="margin-top:8px;font-size:12px;border-collapse:collapse;min-width:360px">
-      <tr class="dim"><th style="text-align:left">How they speak</th><th style="text-align:right">Speakers</th><th style="text-align:right">Clips</th><th style="text-align:right">Hours</th></tr>${rows}</table>` : ''}
+    ${rows ? `<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;margin-top:8px"><table style="width:100%;font-size:12px;border-collapse:collapse">
+      <tr class="dim"><th style="text-align:left;padding:4px 8px 4px 0">How they speak</th><th style="text-align:right;padding:4px 8px">Speakers</th><th style="text-align:right;padding:4px 8px">Clips</th><th style="text-align:right;padding:4px 0 4px 8px">Hours</th></tr>${rows}</table></div>` : ''}
     ${cats ? `<div style="margin-top:6px">${cats}</div>` : ''}`;
 }
 

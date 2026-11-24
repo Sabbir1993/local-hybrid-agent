@@ -19,9 +19,10 @@ def _tokenize(text: str) -> List[str]:
 
 
 def deduplicate_candidates(candidates: List[Dict]) -> List[Dict]:
-    """Deduplicate candidate chunks based on (path/source_id, chunk_idx) and text fingerprint."""
+    """Deduplicate candidate chunks based on (path/source_id, chunk_idx), text fingerprint, and parent_text."""
     seen_keys = set()
     seen_texts = set()
+    seen_parents = set()
     deduped = []
 
     for c in candidates:
@@ -32,16 +33,22 @@ def deduplicate_candidates(candidates: List[Dict]) -> List[Dict]:
 
         text = (c.get("text") or c.get("fact") or "").strip()
         text_fp = re.sub(r"\s+", " ", text[:120].lower())
+        parent_text = (c.get("parent_text") or "").strip()
+        parent_fp = re.sub(r"\s+", " ", parent_text[:160].lower()) if parent_text else None
 
         if key and key in seen_keys:
             continue
         if text_fp and text_fp in seen_texts:
+            continue
+        if parent_fp and parent_fp in seen_parents:
             continue
 
         if key:
             seen_keys.add(key)
         if text_fp:
             seen_texts.add(text_fp)
+        if parent_fp:
+            seen_parents.add(parent_fp)
 
         deduped.append(c)
 
@@ -102,7 +109,15 @@ def rerank_and_filter(
     # 1. Deduplicate text candidates
     unique_candidates = deduplicate_candidates(candidates)
 
-    # 2. Re-score each candidate chunk
+    # 2. Re-score each candidate chunk (Cross-Encoder when configured, blended with lexical cross-features)
+    ce_scores = None
+    if unique_candidates:
+        try:
+            from .cross_encoder import score_pairs
+            ce_scores = score_pairs(query, [c.get("text", "") for c in unique_candidates])
+        except Exception:
+            ce_scores = None
+
     scored_candidates = []
     entity_tokens = set()
     if okf_facts:
@@ -110,10 +125,12 @@ def rerank_and_filter(
             entity_tokens.update(_tokenize(f.get("source_entity", "")))
             entity_tokens.update(_tokenize(f.get("target_entity", "")))
 
-    for c in unique_candidates:
+    for idx, c in enumerate(unique_candidates):
         text = c.get("text", "")
         raw_score = float(c.get("score", 0.5))
         rerank_score = calculate_cross_features(query, text, base_score=raw_score)
+        if ce_scores is not None and idx < len(ce_scores):
+            rerank_score = (0.65 * float(ce_scores[idx])) + (0.35 * rerank_score)
 
         # OKF entity confirmation boost
         if entity_tokens and any(tok in text.lower() for tok in entity_tokens):

@@ -33,9 +33,22 @@ def extract_pdf(path: Path) -> str:
         for page in pdf.pages:
             n_pages += 1
             t = page.extract_text() or ""
-            if t.strip():
+            table_blocks = []
+            try:
+                tables = page.extract_tables() or []
+                for tbl in tables:
+                    if tbl and len(tbl) >= 2:
+                        formatted = kb_structure.rows_to_text(tbl)
+                        if formatted.strip():
+                            table_blocks.append(formatted)
+            except Exception:
+                pass
+            if t.strip() or table_blocks:
                 has_text = True
-                parts.append(f"{kb_structure.page_marker(n_pages)}\n{t}")     # page numbers make answers citable
+                page_body = t.strip()
+                if table_blocks:
+                    page_body = (page_body + "\n\n" if page_body else "") + "\n\n".join(table_blocks)
+                parts.append(f"{kb_structure.page_marker(n_pages)}\n{page_body}")     # page numbers make answers citable
             elif page.images:
                 image_only_pages += 1
                 # visible in the index: a name missing from this page is not proof of absence

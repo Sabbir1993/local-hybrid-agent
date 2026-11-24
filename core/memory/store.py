@@ -56,14 +56,35 @@ def _db() -> ThreadLocalDB:
                 vec BLOB,
                 dim INTEGER,
                 version REAL,
+                parent_text TEXT,
                 UNIQUE(source, path, chunk_idx)
             )
         """)
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+            if "parent_text" not in cols:
+                conn.execute("ALTER TABLE chunks ADD COLUMN parent_text TEXT")
+        except Exception:
+            pass
         conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
         conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('chunks_gen', '0')")
+        conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('kb_gen', '0')")
+        conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('mem_gen', '0')")
         for ev in ("INSERT", "UPDATE", "DELETE"):
             conn.execute(f"""CREATE TRIGGER IF NOT EXISTS chunks_gen_{ev.lower()} AFTER {ev} ON chunks
                 BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'chunks_gen'; END""")
+        conn.execute("""CREATE TRIGGER IF NOT EXISTS kb_gen_insert AFTER INSERT ON chunks WHEN new.source = 'knowledge'
+            BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'kb_gen'; END""")
+        conn.execute("""CREATE TRIGGER IF NOT EXISTS kb_gen_update AFTER UPDATE ON chunks WHEN new.source = 'knowledge' OR old.source = 'knowledge'
+            BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'kb_gen'; END""")
+        conn.execute("""CREATE TRIGGER IF NOT EXISTS kb_gen_delete AFTER DELETE ON chunks WHEN old.source = 'knowledge'
+            BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'kb_gen'; END""")
+        conn.execute("""CREATE TRIGGER IF NOT EXISTS mem_gen_insert AFTER INSERT ON chunks WHEN new.source != 'knowledge'
+            BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'mem_gen'; END""")
+        conn.execute("""CREATE TRIGGER IF NOT EXISTS mem_gen_update AFTER UPDATE ON chunks WHEN new.source != 'knowledge' OR old.source != 'knowledge'
+            BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'mem_gen'; END""")
+        conn.execute("""CREATE TRIGGER IF NOT EXISTS mem_gen_delete AFTER DELETE ON chunks WHEN old.source != 'knowledge'
+            BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'mem_gen'; END""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_novec ON chunks(source) WHERE vec IS NULL")
 
         # FTS5 Full-Text Search virtual table & synchronization triggers
@@ -115,23 +136,25 @@ def _db() -> ThreadLocalDB:
 
 
 def _store_vecs(rows: list, vecs: Optional[list]) -> None:
-    """rows: (source, path, chunk_idx, text, version); vecs parallel or None."""
+    """rows: (source, path, chunk_idx, text, version[, parent_text]); vecs parallel or None."""
     recs = []
-    for i, (source, path, idx, text, version) in enumerate(rows):
+    for i, row in enumerate(rows):
+        source, path, idx, text, version = row[:5]
+        parent_text = row[5] if len(row) > 5 else None
         if vecs is not None:
             v = vecs[i]
             if _np is not None:
                 blob = sqlite3.Binary(_np.asarray(v, dtype=_np.float32).tobytes())
             else:
                 blob = sqlite3.Binary(json.dumps(v).encode())
-            recs.append((source, path, idx, text, blob, len(v), version))
+            recs.append((source, path, idx, text, blob, len(v), version, parent_text))
         else:
-            recs.append((source, path, idx, text, None, None, version))
+            recs.append((source, path, idx, text, None, None, version, parent_text))
     _db().executemany(
-        "INSERT INTO chunks (source, path, chunk_idx, text, vec, dim, version) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "INSERT INTO chunks (source, path, chunk_idx, text, vec, dim, version, parent_text) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(source, path, chunk_idx) DO UPDATE SET "
-        "text=excluded.text, vec=excluded.vec, dim=excluded.dim, version=excluded.version",
+        "text=excluded.text, vec=excluded.vec, dim=excluded.dim, version=excluded.version, parent_text=excluded.parent_text",
         recs,
     )
     _db().commit()

@@ -51,6 +51,18 @@ _DEFAULT_SYNONYM_MAP: dict = {
     "ship": ["delivery", "dispatch", "send"],
     "shipping": ["delivery", "dispatch", "fulfillment"],
     "order": ["purchase", "item"],
+    # banking & compliance cluster
+    "npl": ["non-performing loan", "classified loan", "defaulted loan"],
+    "classified loan": ["npl", "non-performing loan"],
+    "cib": ["credit information bureau", "credit report"],
+    "ltv": ["loan to value", "loan-to-value", "margin requirement"],
+    "crar": ["capital adequacy", "capital to risk-weighted asset"],
+    "dscr": ["debt service coverage", "repayment capacity"],
+    "kyc": ["know your customer", "customer due diligence", "cdd"],
+    "aml": ["anti-money laundering", "cft", "suspicious transaction"],
+    "fdr": ["fixed deposit", "term deposit"],
+    "dps": ["deposit pension scheme", "monthly savings"],
+    "single borrower exposure": ["large loan limit", "exposure limit"],
 }
 
 
@@ -163,9 +175,9 @@ async def search_memory_hybrid(query: str, k: int = 8, requesting_user_id: Optio
     except Exception:
         pass
 
-    # Query native vector store (sqlite-vec) when available
+    # Query native vector store (sqlite-vec) only when in-memory numpy matrix is unavailable
     vec_scores = {}
-    if all_vecs and all_vecs[0] is not None:
+    if cache.get("mat") is None and all_vecs and all_vecs[0] is not None:
         try:
             vec_hits = search_vec_sqlite(all_vecs[0], k=max(k * 3, 30), sources=sources,
                                          allowed_knowledge_source_ids=allowed_knowledge_source_ids)
@@ -175,10 +187,11 @@ async def search_memory_hybrid(query: str, k: int = 8, requesting_user_id: Optio
             pass
 
     ranked_lists: List[List[dict]] = []
+    use_lex_fast = _np is not None and "wc" in cache
     for qi, q_text in enumerate(all_queries):
         qvec = all_vecs[qi] if all_vecs and qi < len(all_vecs) else None
         words = [w.lower() for w in re.findall(r"\w{3,}", q_text)][:8]
-        lex_raw = [float(sum(lower[i].count(w) for w in words)) for i in idxs]
+        lex_raw = _lex_counts(cache, words, idxs) if use_lex_fast else [float(sum(lower[i].count(w) for w in words)) for i in idxs]
         cos_raw = cosines_fn(cache, idxs, qvec)
         lex_n = norm_fn(lex_raw)
         cos_n = norm_fn(cos_raw) if qvec is not None else None
