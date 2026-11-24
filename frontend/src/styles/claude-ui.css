@@ -1525,25 +1525,6 @@ footer {
   .plan-progress-fill { transition: none; }
 }
 
-.chat-steps-toggle {
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--text) 4%, transparent);
-}
-.chat-steps-toggle button {
-  padding: 3px 8px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--dim);
-  font-size: 10.5px;
-  cursor: pointer;
-}
-.chat-steps-toggle button.active { background: var(--panel2); color: var(--text); }
-
 /* Conversation Steps (Chat only):
    Default  — show the compact state message ("Thinking…", "Crunching tool results…")
               plus the live elapsed timer, without expanding the work trace.

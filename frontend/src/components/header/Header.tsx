@@ -1,6 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { useAppStore } from '../../stores/useAppStore';
-import { setConversationSteps } from '../../utils/appearance';
 
 export const Header: React.FC = () => {
   const { 
@@ -9,15 +8,7 @@ export const Header: React.FC = () => {
     activeModal,
     setActiveModal,
     hasPerm,
-    appMode,
   } = useAppStore();
-  const [steps, setSteps] = useState<'default' | 'verbose'>(() =>
-    (document.documentElement.getAttribute('data-conversation-steps') as 'default' | 'verbose') || 'default');
-  useEffect(() => {
-    const sync = () => setSteps((document.documentElement.getAttribute('data-conversation-steps') as 'default' | 'verbose') || 'default');
-    window.addEventListener('a770-appearance-changed', sync);
-    return () => window.removeEventListener('a770-appearance-changed', sync);
-  }, []);
 
   const handleToolClick = (modal: 'customize' | 'report' | 'audit' | 'db' | 'monitor') => {
     setActiveModal(activeModal === modal ? 'none' : modal);
@@ -127,16 +118,8 @@ export const Header: React.FC = () => {
 
       <div className="header-divider" />
 
-      {/* Action Tools Cluster: Conversation Steps (chat only) & Right Dock */}
+      {/* Action Tools Cluster: Right Dock */}
       <div className="header-actions-cluster">
-        {appMode === 'chat' && (
-          <div className="chat-steps-toggle" title="Conversation Steps — how much detail chat shows">
-            <button type="button" className={steps === 'default' ? 'active' : ''}
-                    onClick={() => { setSteps('default'); void setConversationSteps('default'); }}>Default</button>
-            <button type="button" className={steps === 'verbose' ? 'active' : ''}
-                    onClick={() => { setSteps('verbose'); void setConversationSteps('verbose'); }}>Verbose</button>
-          </div>
-        )}
         <button
           id="btn-dock-toggle"
           className="btn ghost icon-btn icon-only"

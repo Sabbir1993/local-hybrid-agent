@@ -1,4 +1,18 @@
 /* ---------------- capabilities panel ---------------- */
+// Consistent line icons for the capability rail (same visual language as Settings).
+const CAP_ICONS = {
+  memory: '<path d="M12 3a4 4 0 0 0-4 4v2a4 4 0 0 0-1 2.8V15a4 4 0 0 0 4 4h2a4 4 0 0 0 4-4V9.8A4 4 0 0 0 16 7.8V5a4 4 0 0 0-4-2Z"/><path d="M9 19v2m6-2v2"/>',
+  web: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.7 3.9 5.7 3.9 9S14.6 18.3 12 21c-2.6-2.7-3.9-5.7-3.9-9S9.4 5.7 12 3Z"/>',
+  shell: '<rect x="3" y="4" width="18" height="15" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/>',
+  skills: '<circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-5"/>',
+  mcp: '<path d="M8 3v4a4 4 0 0 0 4 4h0a4 4 0 0 1 4 4v6M8 3H6a2 2 0 0 0-2 2v2m14 14h-4m4 0v-2"/><circle cx="8" cy="3" r="1"/>',
+  plugins: '<path d="M9 3h3v3a2 2 0 1 0 4 0V3h3v4h-2a2 2 0 1 0 0 4h2v4h-3a2 2 0 1 0-4 0h3v4H9v-3a2 2 0 1 0-4 0H3v-4h2a2 2 0 1 0 0-4H3V7h2a2 2 0 1 0 4 0V3Z"/>',
+  task: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="m8 12 2 2 4-5"/>',
+  router: '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5 5-2Z"/>',
+  library: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/>',
+};
+const capIcon = (name) => `<svg class="cap-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${CAP_ICONS[name] || ''}</svg>`;
+
 async function loadCapabilities() {
   const box = $('caps-content');
   if (!box) return;
@@ -12,7 +26,7 @@ async function loadCapabilities() {
     box.innerHTML = !canMemory ? '<div class="mon-empty">Nothing available for your account.</div>'
       : `<div class="cap-layout"><nav role="tablist" class="cap-rail" aria-label="Agent capabilities"><div class="cap-rail-group">
         <div class="cap-rail-title">About you</div><div class="cap-rail-sub">Notes that follow you between chats</div>
-        <button type="button" role="tab" class="cap-tab on" data-tab="memory" aria-selected="true"><span>🧠 My memory</span></button>
+        <button type="button" role="tab" class="cap-tab on" data-tab="memory" aria-selected="true"><span>${capIcon('memory')}My memory</span></button>
         </div></nav><div class="cap-panes"><div class="ru-pane cap-pane" data-pane="memory">${agentMemoryHtml()}</div></div></div>`;
     if (canMemory) wireAgentMemory(box);
     return;
@@ -32,12 +46,12 @@ async function loadCapabilities() {
     
     // Navigation: grouped by what the person is doing, not one long row of tabs
     const navGroups = [
-      ...(canMemory ? [['About you', 'Notes that follow you between chats', [['memory', '🧠 My memory', null]]]] : []),
+      ...(canMemory ? [['About you', 'Notes that follow you between chats', [['memory', `${capIcon('memory')}My memory`, null]]]] : []),
       ['What the agent can use', 'Switch abilities on or off', [
-        ['web', '🌐 Web', d.web.enabled], ['shell', '⌨️ Shell', (d.shell || {}).enabled],
-        ['skills', '🎯 Skills', d.skills.enabled], ['mcp', '🔌 MCP servers', d.mcp.enabled], ['plugins', '🧩 Plugins', d.plugins.enabled]]],
+        ['web', `${capIcon('web')}Web`, d.web.enabled], ['shell', `${capIcon('shell')}Shell`, (d.shell || {}).enabled],
+        ['skills', `${capIcon('skills')}Skills`, d.skills.enabled], ['mcp', `${capIcon('mcp')}MCP servers`, d.mcp.enabled], ['plugins', `${capIcon('plugins')}Plugins`, d.plugins.enabled]]],
       ['How it works', 'Limits, routing and shared commands', [
-        ['task', '🤖 Task limits', null], ['router', '🧭 Router', null], ['library', '📚 Library', null]]],
+        ['task', `${capIcon('task')}Task limits`, null], ['router', `${capIcon('router')}Router`, null], ['library', `${capIcon('library')}Library`, null]]],
     ];
     h += `<div class="cap-layout"><nav role="tablist" class="cap-rail" aria-label="Agent capabilities">
       ${navGroups.map(([title, sub, tabs]) => `<div class="cap-rail-group"><div class="cap-rail-title">${title}</div><div class="cap-rail-sub">${sub}</div>${tabs.map(([id, label, en]) => tabBtn(id, label, en)).join('')}</div>`).join('')}
@@ -52,7 +66,7 @@ async function loadCapabilities() {
       <div style="margin-bottom:12px;">
         ${(d.web.tools || []).map(t => `
           <div class="cap-tool-entry">
-            <span class="cap-tool-badge web"><span class="tool-badge-ico">🌐</span><code>${esc(t.name)}</code></span>
+            <span class="cap-tool-badge web"><span class="tool-badge-ico">${capIcon('web')}</span><code>${esc(t.name)}</code></span>
             <span class="cap-tool-desc">${esc(t.description || '')}</span>
           </div>`).join('')}
       </div>
@@ -139,7 +153,7 @@ async function loadCapabilities() {
     h += capSection('skills', '🎯 Skills', d.skills.enabled,
       (d.skills.items || []).map(s => `
         <div class="cap-tool-entry">
-          <span class="cap-tool-badge skill"><span class="tool-badge-ico">🎯</span><code>${esc(s.name)}</code></span>
+          <span class="cap-tool-badge skill"><span class="tool-badge-ico">${capIcon('skills')}</span><code>${esc(s.name)}</code></span>
           <span class="cap-tool-desc">${esc(s.description || '')}</span>
         </div>`).join('') || '<div class="cap-item dim" style="padding:4px 6px;">none in skills/ yet</div>',
       'Reusable instruction packs loaded from .agents/skills/*/SKILL.md');
@@ -168,7 +182,7 @@ async function loadCapabilities() {
             <div class="mcp-tools-list">
               ${(s.tools || []).map(t => `
                 <div class="cap-tool-entry sub">
-                  <span class="cap-tool-badge mcp"><span class="tool-badge-ico">🔌</span><code>${esc(t.name)}</code></span>
+                  <span class="cap-tool-badge mcp"><span class="tool-badge-ico">${capIcon('mcp')}</span><code>${esc(t.name)}</code></span>
                   ${t.description ? `<span class="cap-tool-desc">${esc(t.description)}</span>` : ''}
                 </div>`).join('') || '<div class="dim" style="font-size:10px; padding:2px 0;">No tools exposed.</div>'}
             </div>
@@ -191,7 +205,7 @@ async function loadCapabilities() {
     const canConfigureGlobal = !!(window.hasPerm && window.hasPerm('settings.shell.configure'));
     const shellInner = `
       <div class="cap-tool-entry" style="margin-bottom:6px;">
-        <span class="cap-tool-badge shell"><span class="tool-badge-ico">⌨️</span><code>run_shell</code></span>
+        <span class="cap-tool-badge shell"><span class="tool-badge-ico">${capIcon('shell')}</span><code>run_shell</code></span>
         <span class="cap-tool-desc">Workspace shell command execution</span>
       </div>
       <div class="cap-item">
@@ -519,7 +533,7 @@ function agentLibraryHtml(lib, canEdit) {
            style="width:auto; margin:0 0 0 auto; padding:1px 8px; font-size:10px;">${it.state === 'allowed' ? 'Deny' : 'Allow'}</button>` : '';
     const title = it.state === 'shadowed' ? 'a built-in command, skill or role with the same name takes priority' : '';
     return `<div class="cap-tool-entry" style="flex-wrap:wrap;">
-        <span class="cap-tool-badge skill"><span class="tool-badge-ico">${kind === 'agents' ? '🤖' : '📚'}</span><code>${esc(it.name)}</code></span>
+        <span class="cap-tool-badge skill"><span class="tool-badge-ico">${capIcon(kind === 'agents' ? 'task' : 'library')}</span><code>${esc(it.name)}</code></span>
         <span style="font-size:10px; ${LIB_STATE_STYLE[it.state] || ''}" title="${title}">${esc(it.state)}</span>
         ${it.source === 'native' ? '<span class="dim" style="font-size:9.5px;" title="app-owned command in config/commands (ported to this app\'s tools and lanes)">native</span>' : ''}
         ${btn}
@@ -1397,7 +1411,7 @@ function pluginRowHtml(p, canManage) {
       <div class="mcp-tools-list">
         ${(p.tools || []).map(t => `
           <div class="cap-tool-entry sub">
-            <span class="cap-tool-badge plugin"><span class="tool-badge-ico">⚡</span><code>${esc(t.split('__').pop())}</code></span>
+            <span class="cap-tool-badge plugin"><span class="tool-badge-ico">${capIcon('plugins')}</span><code>${esc(t.split('__').pop())}</code></span>
           </div>`).join('') || '<div class="dim" style="font-size:10px; padding:2px 0;">No tools exposed.</div>'}
       </div>
     </details>`;
@@ -1431,7 +1445,7 @@ function renderPluginCatalog(box) {
   box.querySelector('#plugin-cards').innerHTML = list.map(p => `
     <div class="plugin-card" style="border:1px solid var(--border); border-radius:6px; padding:6px 8px; display:flex; flex-direction:column; gap:4px;">
       <div style="display:flex; align-items:center; gap:6px;">
-        <span class="tool-badge-ico">⚡</span><b>${esc(p.title)}</b>
+        <span class="tool-badge-ico">${capIcon('plugins')}</span><b>${esc(p.title)}</b>
         <span class="dim" style="font-size:9.5px;">${esc(p.version ? 'v' + p.version : '')}</span>
         <span style="margin-left:auto;">${p.installed
           ? `<span class="dim" style="font-size:10px;">${p.modified ? 'installed (modified)' : 'installed ✓'}</span>`
