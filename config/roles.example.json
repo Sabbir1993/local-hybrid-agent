@@ -1,7 +1,6 @@
 {
   "planner": {
     "lane": "main",
-    "max_steps": 6,
     "tools": [
       "list_files",
       "project_overview",
@@ -20,7 +19,6 @@
   },
   "coder": {
     "lane": "executor",
-    "max_steps": 10,
     "tools": [
       "write_file",
       "append_file",
@@ -38,7 +36,6 @@
   },
   "reviewer": {
     "lane": "main",
-    "max_steps": 6,
     "tools": [
       "list_files",
       "project_overview",
@@ -52,7 +49,6 @@
     "system_prompt": "You are a code-review sub-agent. Read the referenced files/diff and report concrete issues found -- do not modify anything."
   },
   "multi-analyzer": {
-    "max_steps": 8,
     "tools": [
       "list_files",
       "project_overview",
@@ -68,7 +64,6 @@
     "system_prompt": "You are an analyst sub-agent in a multi-lane review. Read the relevant code (read-only) and analyze the requirement from the angle named in your task (backend: data flow, APIs, security, feasibility; frontend: UI/UX, state, accessibility). Return: key findings, risks, open questions, and a recommended approach. Never write files. Never output real card numbers, tokens or credentials -- write [PLACEHOLDER]."
   },
   "multi-architect": {
-    "max_steps": 8,
     "tools": [
       "list_files",
       "project_overview",
@@ -84,7 +79,6 @@
     "system_prompt": "You are an architect sub-agent in a multi-lane plan. From the task and prior analysis, produce a concrete step-by-step implementation plan: files to change (exact paths), the change in each, order, tests to add, and risks. If asked for a prototype, return a unified diff in your answer instead of editing files. Never write files. Use [PLACEHOLDER] for any secret or card value."
   },
   "multi-reviewer": {
-    "max_steps": 6,
     "tools": [
       "list_files",
       "project_overview",

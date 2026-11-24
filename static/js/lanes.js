@@ -381,8 +381,8 @@ function sdLoadBtn(l) {
     const secs = l.loading_since ? Math.max(0, Math.round(Date.now() / 1000 - l.loading_since)) : 0;
     return `<button type="button" class="btn ghost ln-small" disabled>Loading… ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}</button>`;
   }
-  if (l.state === 'loaded') return `<button type="button" class="btn ghost ln-small" data-ln="stop" data-name="${esc(l.name)}">■ Unload</button>`;
-  return `<button type="button" class="btn accent ln-small" data-ln="load" data-name="${esc(l.name)}"${l.files_ok ? '' : ' disabled'}>▶ Load</button>`;
+  if (l.state === 'loaded') return `<button type="button" class="btn ghost ln-small" data-ln="stop" data-name="${esc(l.name)}">Unload</button>`;
+  return `<button type="button" class="btn ghost ln-small" data-ln="load" data-name="${esc(l.name)}"${l.files_ok ? '' : ' disabled'}>Load</button>`;
 }
 
 function sdSetupHtml(l) {

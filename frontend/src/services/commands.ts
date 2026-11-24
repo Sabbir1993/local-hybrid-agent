@@ -1,6 +1,7 @@
 // Slash commands and @file mentions (port of the menu logic in static/js/agent-cmd.js).
 import { apiFetch } from './api';
 import { cachedMediaStatus, mediaReady } from './media';
+import { agentWsParam } from '../utils/wsTarget';
 
 export interface CmdItem {
   icon: string;
@@ -126,7 +127,9 @@ export async function slashItems(query: string, mode: SlashMode, customAgents: a
 
 export async function fileItems(query: string): Promise<CmdItem[]> {
   try {
-    const r = await apiFetch('/agent/workspace');
+    const wsParam = agentWsParam();
+    const url = '/agent/workspace' + (wsParam ? '?' + wsParam.replace(/^&/, '') : '');
+    const r = await apiFetch(url);
     const d = await r.json();
     const q = query.toLowerCase();
     return (d.files || [])
@@ -138,7 +141,7 @@ export async function fileItems(query: string): Promise<CmdItem[]> {
   }
 }
 
-/** @path tokens are replaced by the file's text (code mode), up to 5 files. */
+/** @path tokens are replaced by the file's text (code mode and agent mode), up to 5 files. */
 export async function expandAtTags(text: string): Promise<string> {
   if (!text.includes('@')) return text;
   // whole tokens: "@src/app.ts" but not "user@example.com" or the start of "@a.json" when "@a.js" is meant
@@ -146,9 +149,10 @@ export async function expandAtTags(text: string): Promise<string> {
   const tags = Array.from(new Set([...text.matchAll(re)].map((m) => m[2]))).slice(0, 5);
   if (!tags.length) return text;
   const files = new Map<string, string>();
+  const wsParam = agentWsParam();
   for (const t of tags) {
     try {
-      const r = await apiFetch('/agent/ws/file?path=' + encodeURIComponent(t));
+      const r = await apiFetch('/agent/ws/file?path=' + encodeURIComponent(t) + wsParam);
       const d = await r.json();
       if (!r.ok || d.error) continue;
       const body = String(d.content || '');

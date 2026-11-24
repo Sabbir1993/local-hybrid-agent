@@ -28,12 +28,18 @@ def parse(text) -> tuple[bool, str]:
 
 def instruction(task: str) -> str:
     """The user's message as the model sees it on a /parallel run."""
-    return ("[parallel] The user asked for this task to be split across parallel sub-agents. Call "
-            "spawn_parallel_agents now with 2-4 agents. Give each agent ONE independent part with complete, "
-            "self-contained instructions: the exact files, folders or questions it covers, and what to report back. "
-            "Parts must not overlap and must not edit the same file. Use role='reviewer' or 'planner' for read-only "
-            "parts and role='coder' only for parts that change files. When the results come back, check them and "
-            "give the user one combined answer.\n\nTask: " + (task or "(no task given - ask the user what to split)"))
+    return (
+        "[parallel] Multi-Agent Execution Plan:\n"
+        "1. Prerequisite Checks: If the user's task requires a shared prerequisite (e.g. logging in, finding a token, or reading a shared credential), "
+        "either provide the resolved credential/context in each sub-agent's task prompt or ensure it is posted to the session blackboard.\n"
+        "2. Parallel Fan-Out: Call spawn_parallel_agents now with 2-4 agents. Decompose the remaining independent workload into distinct tasks: "
+        "give each sub-agent clear, complete, self-contained instructions (target files, URLs, expected output). "
+        "Independent parts must not write to the same file concurrently.\n"
+        "3. Roles: Use role='reviewer' or 'planner' for read-only analysis and role='coder' for implementation or downloading/writing files.\n"
+        "4. Handling Results & Partial Success: When sub-agents return, review their outputs. If any tasks succeeded, accept their files/results directly. "
+        "Do NOT re-execute completed tasks. Only follow up on incomplete or failed tasks if needed, then synthesize a final combined response for the user.\n\n"
+        "Task: " + (task or "(no task given - ask the user what to split)")
+    )
 
 
 def unavailable_reason(personal: bool, hidden_tools, custom_agent_tools) -> str:

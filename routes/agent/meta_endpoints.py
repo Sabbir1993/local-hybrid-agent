@@ -1,5 +1,6 @@
 import re
 import sys
+from typing import Optional
 from fastapi import Depends
 from fastapi.responses import JSONResponse
 from core.auth import Principal
@@ -59,9 +60,22 @@ async def agent_command_expand(req: CommandExpandReq, user: Principal = Depends(
 
 
 @router.get("/agent/workspace")
-async def agent_workspace():
+async def agent_workspace(agent: Optional[int] = None, user: Principal = Depends(get_current_user)):
     # flat file list for @-tagging, read from the user's machine via the companion
-    uid, ws = require_device_workspace()
-    data = await companion_bridge.call(uid, "fs.list", {"root": str(ws), "pattern": "**/*"})
-    files = [{"path": f} for f in sorted(data.get("files") or []) if isinstance(f, str)]
-    return {"root": str(ws), "project": get_active_project(), "files": files[:500]}
+    if agent:
+        try:
+            from core.auth_db import db_get_custom_agent
+            from core.request_context import set_personal_workspace
+            a = db_get_custom_agent(agent, user.id)
+            folder = (a or {}).get("work_dir") if (a or {}).get("user_id") == user.id else ""
+            if folder:
+                set_personal_workspace(folder)
+        except Exception:
+            pass
+    try:
+        uid, ws = require_device_workspace()
+        data = await companion_bridge.call(uid, "fs.list", {"root": str(ws), "pattern": "**/*"})
+        files = [{"path": f} for f in sorted(data.get("files") or []) if isinstance(f, str)]
+        return {"root": str(ws), "project": get_active_project(), "files": files[:500]}
+    except Exception as e:
+        return {"root": "", "project": get_active_project(), "files": [], "error": str(e)}

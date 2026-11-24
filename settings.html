@@ -1311,9 +1311,9 @@
                   <code style="font-size: 11.5px; color: var(--accent, #38bdf8); background: rgba(56,189,248,0.1); padding: 1px 6px; border-radius: 4px;">subagent_default_steps</code>
                 </td>
                 <td style="padding: 12px;">
-                  <input type="number" id="subagent-default-steps" class="input" min="1" max="30" style="width: 80px; text-align: center;" value="10" />
+                  <input type="number" id="subagent-default-steps" class="input" min="1" max="100" style="width: 80px; text-align: center;" value="40" />
                 </td>
-                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e);">1 – 30</td>
+                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e);">1 – 100</td>
                 <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e); line-height: 1.45;">Steps allocated to a subagent when not explicitly set by the task.</td>
               </tr>
               <tr style="border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));">
@@ -1322,9 +1322,9 @@
                   <code style="font-size: 11.5px; color: var(--accent, #38bdf8); background: rgba(56,189,248,0.1); padding: 1px 6px; border-radius: 4px;">subagent_max_steps</code>
                 </td>
                 <td style="padding: 12px;">
-                  <input type="number" id="subagent-max-steps" class="input" min="5" max="50" style="width: 80px; text-align: center;" value="20" />
+                  <input type="number" id="subagent-max-steps" class="input" min="5" max="150" style="width: 80px; text-align: center;" value="80" />
                 </td>
-                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e);">5 – 50</td>
+                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e);">5 – 150</td>
                 <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e); line-height: 1.45;">Absolute maximum steps a subagent is allowed to take before stopping.</td>
               </tr>
               <tr style="border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));">
@@ -1334,11 +1334,11 @@
                 </td>
                 <td style="padding: 12px;">
                   <div style="display: flex; align-items: center; gap: 4px;">
-                    <input type="number" id="subagent-timeout-s" class="input" min="30" max="1800" style="width: 80px; text-align: center;" value="180" />
+                    <input type="number" id="subagent-timeout-s" class="input" min="30" max="7200" style="width: 80px; text-align: center;" value="3600" />
                     <span style="font-size: 12px; color: var(--dim, #8b949e);">s</span>
                   </div>
                 </td>
-                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e);">30s – 1800s</td>
+                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e);">30s – 7200s</td>
                 <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e); line-height: 1.45;">Overall wall-clock timeout per subagent. If exceeded, returns partial findings with diagnostic reason.</td>
               </tr>
               <tr style="border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));">
@@ -1347,9 +1347,9 @@
                   <code style="font-size: 11.5px; color: var(--accent, #38bdf8); background: rgba(56,189,248,0.1); padding: 1px 6px; border-radius: 4px;">subagent_max_parallel</code>
                 </td>
                 <td style="padding: 12px;">
-                  <input type="number" id="subagent-max-parallel" class="input" min="1" max="10" style="width: 80px; text-align: center;" value="4" />
+                  <input type="number" id="subagent-max-parallel" class="input" min="1" max="16" style="width: 80px; text-align: center;" value="4" />
                 </td>
-                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e);">1 – 10</td>
+                <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e);">1 – 16</td>
                 <td style="padding: 12px; font-size: 13px; color: var(--dim, #8b949e); line-height: 1.45;">Maximum subagents allowed to run concurrently in parallel.</td>
               </tr>
             </tbody>

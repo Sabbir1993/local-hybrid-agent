@@ -12,9 +12,9 @@ from .base import router
 
 
 class SubagentConfigRequest(BaseModel):
-    subagent_default_steps: Optional[int] = 10
-    subagent_max_steps: Optional[int] = 20
-    subagent_timeout_s: Optional[int] = 180
+    subagent_default_steps: Optional[int] = 40
+    subagent_max_steps: Optional[int] = 80
+    subagent_timeout_s: Optional[int] = 3600
     subagent_max_parallel: Optional[int] = 4
 
 
@@ -27,10 +27,10 @@ async def get_subagents_config(user: Principal = Depends(get_current_user)):
 async def save_subagents_config(req: SubagentConfigRequest,
                                 user: Principal = Depends(require_permission("settings.orchestration.configure"))):
     cfg = {
-        "subagent_default_steps": max(1, min(30, int(req.subagent_default_steps if req.subagent_default_steps is not None else 10))),
-        "subagent_max_steps": max(5, min(50, int(req.subagent_max_steps if req.subagent_max_steps is not None else 20))),
-        "subagent_timeout_s": max(30, min(1800, int(req.subagent_timeout_s if req.subagent_timeout_s is not None else 180))),
-        "subagent_max_parallel": max(1, min(10, int(req.subagent_max_parallel if req.subagent_max_parallel is not None else 4))),
+        "subagent_default_steps": max(1, min(100, int(req.subagent_default_steps if req.subagent_default_steps is not None else 40))),
+        "subagent_max_steps": max(5, min(150, int(req.subagent_max_steps if req.subagent_max_steps is not None else 80))),
+        "subagent_timeout_s": max(30, min(7200, int(req.subagent_timeout_s if req.subagent_timeout_s is not None else 3600))),
+        "subagent_max_parallel": max(1, min(16, int(req.subagent_max_parallel if req.subagent_max_parallel is not None else 4))),
     }
     # Ensure default does not exceed max
     if cfg["subagent_default_steps"] > cfg["subagent_max_steps"]:

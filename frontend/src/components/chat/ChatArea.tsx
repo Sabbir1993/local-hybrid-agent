@@ -302,6 +302,7 @@ const BotActions: React.FC<{ m: any; isLast: boolean; streaming: boolean }> = ({
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setRating(next);
+      if (m.meta) m.meta.rating = next;
     } catch (e: any) {
       showToast('Could not save feedback: ' + e.message, 'error');
     }

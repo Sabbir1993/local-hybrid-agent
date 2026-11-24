@@ -32,5 +32,5 @@ export function wsTarget(): WsTarget {
 /** "&agent=<id>" for the requests that read workspace files, '' outside Agent mode. */
 export function agentWsParam(): string {
   const t = wsTarget();
-  return t.kind === 'agent' && t.agentId ? `&agent=${encodeURIComponent(t.agentId)}` : '';
+  return t.kind === 'agent' && t.agentId && t.dir ? `&agent=${encodeURIComponent(t.agentId)}` : '';
 }

@@ -511,7 +511,8 @@ export const Composer: React.FC = () => {
   const refreshMenu = async (value: string, caret: number) => {
     const tok = currentToken(value, caret);
     const req = ++menuReq.current;
-    if (!tok || (tok.ch === '@' && appMode !== 'code')) {
+    const canTagFiles = appMode === 'code' || appMode === 'agent';
+    if (!tok || (tok.ch === '@' && !canTagFiles)) {
       setMenu(null);
       return;
     }
@@ -674,8 +675,8 @@ export const Composer: React.FC = () => {
       let imageUrls: string[] = [];
       let fileNames = '';
       let prompt = text;
-      // @file mentions in what you typed become the file's text (Code mode); attached text is never scanned
-      const typed = appMode === 'code' ? await expandAtTags(text) : text;
+      // @file mentions in what you typed become the file's text (Code mode & Agent mode); attached text is never scanned
+      const typed = (appMode === 'code' || appMode === 'agent') ? await expandAtTags(text) : text;
 
       if (attachments.length > 0) {
         const sent = attachments;

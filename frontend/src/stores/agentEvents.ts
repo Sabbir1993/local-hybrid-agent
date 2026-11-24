@@ -229,9 +229,31 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
         ? 'failed'
         : 'running';
 
+      const target = d.target || d.args?.path || d.args?.file_path || d.args?.file || d.args?.query || d.args?.command || d.args?.pattern || d.args?.url || '';
+
       if (call) {
         if (!call.subagents) call.subagents = {};
         const prev = call.subagents[key] || {};
+        const prevTools = Array.isArray(prev.tools) ? [...prev.tools] : [];
+        let lastTool = prev.last_tool;
+        let filesModified = Array.isArray(prev.files_modified) ? [...prev.files_modified] : [];
+
+        if (ev === 'tool_start') {
+          prevTools.push({ tool: d.tool, target, args: d.args, step: d.step, time: Date.now() });
+          if (['write_file', 'edit_file', 'append_file'].includes(d.tool) && target && !filesModified.includes(target)) {
+            filesModified.push(target);
+          }
+        } else if (ev === 'tool_done') {
+          if (prevTools.length > 0) {
+            prevTools[prevTools.length - 1] = { ...prevTools[prevTools.length - 1], ok: d.ok };
+          }
+          lastTool = { tool: d.tool, target: target || prev.current_target || '', ok: d.ok, step: d.step };
+        } else if (ev === 'done' && Array.isArray(d.files)) {
+          d.files.forEach((f: string) => {
+            if (!filesModified.includes(f)) filesModified.push(f);
+          });
+        }
+
         call.subagents[key] = {
           ...prev,
           sub_index: subIdx !== undefined ? subIdx : prev.sub_index,
@@ -243,7 +265,12 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
           step: d.step !== undefined ? d.step : prev.step,
           max_steps: d.max_steps !== undefined ? d.max_steps : prev.max_steps,
           current_tool: ev === 'tool_start' ? d.tool : (ev === 'tool_done' ? null : prev.current_tool),
+          current_target: ev === 'tool_start' ? target : (ev === 'tool_done' ? null : prev.current_target),
           current_tool_args: ev === 'tool_start' ? d.args : (ev === 'tool_done' ? null : prev.current_tool_args),
+          last_tool: lastTool,
+          tools: prevTools,
+          files_modified: filesModified,
+          files: filesModified,
           elapsed_s: d.elapsed_s !== undefined ? d.elapsed_s : prev.elapsed_s,
           duration_s: d.duration_s !== undefined ? d.duration_s : prev.duration_s,
           error: d.error || prev.error,
@@ -253,7 +280,6 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
         if (ev === 'step') {
           L.statusText = `[Sub-agent ${roleLabel}] Step ${d.step}/${d.max_steps || '?'}`;
         } else if (ev === 'tool_start') {
-          const target = d.args?.path || d.args?.file || d.args?.query || d.args?.command || '';
           const targetShort = target ? ` (${String(target).split(/[\\/]/).pop()})` : '';
           L.statusText = `[Sub-agent ${roleLabel}] ${d.tool}${targetShort}...`;
         } else if (ev === 'done') {
@@ -264,6 +290,7 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       }
 
       // Live Right Dock update - injected by the store, no global shortcut.
+      const currentCallSub = call?.subagents?.[key];
       ctx.onSubagents?.update(key, {
         id: `sub_${subIdx !== undefined ? subIdx : Number(key) + 1}`,
         index: (subIdx !== undefined ? subIdx : Number(key) + 1),
@@ -273,7 +300,12 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
         step: d.step,
         max_steps: d.max_steps,
         current_tool: ev === 'tool_start' ? d.tool : (ev === 'tool_done' ? null : undefined),
+        current_target: ev === 'tool_start' ? target : (ev === 'tool_done' ? null : undefined),
         current_tool_args: ev === 'tool_start' ? d.args : (ev === 'tool_done' ? null : undefined),
+        last_tool: currentCallSub?.last_tool,
+        tools: currentCallSub?.tools,
+        files_modified: currentCallSub?.files_modified,
+        files: currentCallSub?.files_modified,
         elapsed_s: d.elapsed_s,
         duration_s: d.duration_s,
         output: d.output,
@@ -489,6 +521,10 @@ export function latestSubagentsFromMessages(messages: ChatMessage[]): any[] {
                   failure_reason: p.failure_reason || item.failure_reason,
                   error: p.failure_reason || item.error,
                   output: item.output || p.output,
+                  files_modified: item.files_modified || p.files || [],
+                  files: item.files || item.files_modified || p.files || [],
+                  tools: item.tools || [],
+                  last_tool: item.last_tool,
                 };
               }
               return item;
@@ -509,13 +545,16 @@ export function latestSubagentsFromMessages(messages: ChatMessage[]): any[] {
               id: `sub_${p.index}`,
               index: p.index,
               role: p.role,
-              task: '',
+              task: p.task || '',
               status: canonStatus,
-              step: p.steps || 0,
-              max_steps: 10,
+              step: p.stepsCount || 0,
+              max_steps: p.stepsCount || 10,
+              output: p.final_content || '',
               failure_reason: p.failure_reason,
               error: p.failure_reason,
-              output: p.output,
+              files_modified: p.files || [],
+              files: p.files || [],
+              tools: p.steps?.map((st: any) => st.tools?.[0]).filter(Boolean) || [],
             };
           });
         }

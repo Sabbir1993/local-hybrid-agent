@@ -14,6 +14,15 @@ export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'extra';
 export type DockTab = 'plan' | 'tasks' | 'subagents' | 'files' | 'preview' | 'terminal';
 export type ActiveModal = 'none' | 'audit' | 'settings' | 'report' | 'db' | 'monitor' | 'customize' | 'docs' | 'preview' | 'profile';
 
+export interface SubagentToolCall {
+  tool: string;
+  target?: string;
+  args?: any;
+  ok?: boolean;
+  step?: number;
+  time?: number;
+}
+
 export interface SubagentInfo {
   id: string;
   index: number;
@@ -24,6 +33,11 @@ export interface SubagentInfo {
   max_steps: number;
   current_tool?: string | null;
   current_tool_args?: any;
+  current_target?: string | null;
+  last_tool?: SubagentToolCall | null;
+  tools?: SubagentToolCall[];
+  files?: string[];
+  files_modified?: string[];
   elapsed_s?: number;
   duration_s?: number;
   output?: string;
@@ -924,23 +938,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ dockTab, dockCollapsed: false });
   },
 
-  updateSubagent: (key, data) => set((s) => ({
-    activeSubagents: {
-      ...s.activeSubagents,
-      [key]: {
-        ...(s.activeSubagents[key] || {
-          id: key,
-          index: Number(key) + 1 || 1,
-          role: 'subagent',
-          task: '',
-          status: 'running',
-          step: 0,
-          max_steps: 10,
-        }),
-        ...data,
+  updateSubagent: (key, data) => set((s) => {
+    const existing = s.activeSubagents[key] || {
+      id: key,
+      index: Number(key) + 1 || 1,
+      role: 'subagent',
+      task: '',
+      status: 'running',
+      step: 0,
+      max_steps: 10,
+    };
+    const cleaned: any = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (v !== undefined) cleaned[k] = v;
+    }
+    return {
+      activeSubagents: {
+        ...s.activeSubagents,
+        [key]: {
+          ...existing,
+          ...cleaned,
+        },
       },
-    },
-  })),
+    };
+  }),
   setSubagentsBatch: (agents) => set(() => {
     const map: Record<string, SubagentInfo> = {};
     agents.forEach((a, i) => {

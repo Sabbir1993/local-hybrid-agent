@@ -264,7 +264,7 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
     sub_cfg = load_subagent_config()
     cfg_default_steps = int(sub_cfg.get("subagent_default_steps", DEFAULT_SUBAGENT_STEPS))
     cfg_max_steps = int(sub_cfg.get("subagent_max_steps", MAX_SUBAGENT_STEPS))
-    default_steps = 10 if (lane_override or role_cfg.get("lane")) == "main" else cfg_default_steps
+    default_steps = cfg_default_steps
     steps = min(cfg_max_steps, max(1, int(max_steps or role_cfg.get("max_steps") or default_steps)))
 
     all_schemas = [t for t in registry.schemas() if t.get("function", {}).get("name") not in DENIED_TOOLS]
@@ -373,7 +373,11 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
             # (several thousand tokens), so compaction thought it fit and the server
             # refused the prompt.
             sub_win = await _subagent_window(lane_used)
-            for step_idx in range(steps):
+            step_idx = 0
+            consecutive_successful_tools = 0
+            recent_tool_sigs = []
+
+            while step_idx < steps:
                 await emit_subagent_event({
                     "event": "step",
                     "subagent_id": subagent_id,
@@ -446,7 +450,7 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                         a = json.loads(tc["function"]["arguments"])
                     except Exception:
                         a = {}
-                    target_p = a.get("path") or a.get("file_path") or a.get("command") or a.get("pattern") or a.get("query") or ""
+                    target_p = a.get("path") or a.get("file_path") or a.get("command") or a.get("pattern") or a.get("query") or a.get("url") or ""
                     await emit_subagent_event({
                         "event": "tool_start",
                         "subagent_id": subagent_id,
@@ -455,7 +459,8 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                         "role": role or "generic",
                         "step": step_idx + 1,
                         "tool": name,
-                        "target": str(target_p)[:100],
+                        "target": str(target_p)[:150],
+                        "args": {k: str(v)[:150] for k, v in a.items() if k not in ("token", "secret", "password")},
                     })
                     refused = subagent_call_verdict(name, names_ok)
                     if refused is None:
@@ -475,6 +480,12 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                     else:
                         result = await run_tool(name, a)
                     is_ok = not (isinstance(result, str) and (result.startswith("error:") or result.startswith("File not found")))
+                    if is_ok:
+                        consecutive_successful_tools += 1
+                    else:
+                        consecutive_successful_tools = 0
+                    recent_tool_sigs.append((name, str(target_p)))
+
                     await emit_subagent_event({
                         "event": "tool_done",
                         "subagent_id": subagent_id,
@@ -483,12 +494,41 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
                         "role": role or "generic",
                         "step": step_idx + 1,
                         "tool": name,
+                        "target": str(target_p)[:150],
                         "ok": is_ok,
                     })
                     # a child re-sends its own history every step too: keep its tool results as small as the parent's
                     msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": cap_tool_result(result)})
-            else:
-                final_content = final_content or "(sub-agent reached its step limit without a final answer)"
+
+                step_idx += 1
+                # Forward-progress auto-extension: if at step ceiling but making real forward progress, extend budget
+                if step_idx >= steps and steps < cfg_max_steps:
+                    is_looping = len(recent_tool_sigs) >= 3 and len(set(recent_tool_sigs[-3:])) == 1
+                    if consecutive_successful_tools >= 1 and not is_looping:
+                        bonus = min(5, cfg_max_steps - steps)
+                        if bonus > 0:
+                            steps += bonus
+                            await emit_subagent_event({
+                                "event": "budget_extended",
+                                "subagent_id": subagent_id,
+                                "index": sub_index,
+                                "sub_index": sub_index,
+                                "step": step_idx,
+                                "max_steps": steps,
+                                "bonus": bonus,
+                                "role": role or "generic",
+                            })
+
+            if status != "success" and status != "no_response":
+                status = "step_exhausted"
+                summary_items = []
+                if files_modified:
+                    summary_items.append(f"files modified: {', '.join(sorted(files_modified))}")
+                posted_keys = _active_scope_writes.get() or []
+                if posted_keys:
+                    summary_items.append(f"blackboard keys: {', '.join(posted_keys)}")
+                detail = f" - Partial progress: {'; '.join(summary_items)}" if summary_items else ""
+                final_content = final_content or f"(sub-agent reached its step limit without a final answer{detail})"
 
         posted_keys = _active_scope_writes.get() or []
     finally:
@@ -524,6 +564,7 @@ async def run_subagent(task: str, role: Optional[str] = None, lane_override: Opt
         "status": status,
         "duration_s": round(time.time() - t_start, 2),
         "output": final_content[:500],
+        "files": sorted(files_modified) if files_modified else [],
     })
     header = _envelope_header(
         role=role,
@@ -555,15 +596,16 @@ async def run_parallel_subagents(agent_specs: list, max_concurrency: Optional[in
     if not agent_specs or not isinstance(agent_specs, list):
         return "error: 'agents' must be a non-empty list of agent specifications"
     sub_cfg = load_subagent_config()
-    cfg_parallel = int(sub_cfg.get("subagent_max_parallel", 4))
-    timeout_s = int(sub_cfg.get("subagent_timeout_s", 180))
+    cfg_parallel = int(sub_cfg.get("subagent_max_parallel", DEFAULT_SUBAGENT_MAX_PARALLEL))
+    timeout_s = int(sub_cfg.get("subagent_timeout_s", DEFAULT_SUBAGENT_TIMEOUT_S))
     limit = min(max_concurrency or cfg_parallel, cfg_parallel)
 
     from ..request_context import personal_scope
     if personal_scope():
         limit = min(limit, PERSONAL_MAX_PARALLEL)   # Agent mode shares the GPU with everyone
 
-    sem = asyncio.Semaphore(max(1, limit))
+    concurrency = max(1, limit)
+    sem = asyncio.Semaphore(concurrency)
 
     async def _run_one(idx: int, spec: dict) -> str:
         if not isinstance(spec, dict):
@@ -629,10 +671,36 @@ async def run_parallel_subagents(agent_specs: list, max_concurrency: Optional[in
                 title = f"Sub-agent #{idx+1}" + (f" (role={role})" if role else "")
                 return f"=== {title} ===\n[sub-agent · role={role or 'generic'} · status=error]\nerror: {err_msg}"
 
-    tasks = [_run_one(i, spec) for i, spec in enumerate(agent_specs)]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Dynamic queue worker pool: workers pull tasks as previous ones finish
+    queue: asyncio.Queue = asyncio.Queue()
+    for i, spec in enumerate(agent_specs):
+        await queue.put((i, spec))
+
+    results = [None] * len(agent_specs)
+    worker_count = min(concurrency, len(agent_specs))
+
+    async def _worker():
+        while not queue.empty():
+            try:
+                idx, spec = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            try:
+                res = await _run_one(idx, spec)
+                results[idx] = res
+            except Exception as e:
+                results[idx] = e
+            finally:
+                queue.task_done()
+
+    workers = [asyncio.create_task(_worker()) for _ in range(worker_count)]
+    await asyncio.gather(*workers)
 
     formatted = []
+    success_count = 0
+    exhausted_count = 0
+    failed_count = 0
+
     for i, r in enumerate(results):
         spec = agent_specs[i] if i < len(agent_specs) and isinstance(agent_specs[i], dict) else {}
         spec_role = spec.get("role") or "generic"
@@ -640,10 +708,29 @@ async def run_parallel_subagents(agent_specs: list, max_concurrency: Optional[in
             err_msg = f"{type(r).__name__}: {r}"
             title = f"Sub-agent #{i+1}" + (f" (role={spec_role})" if spec_role else "")
             formatted.append(f"=== {title} ===\n[sub-agent · role={spec_role} · 0 msgs · status=error]\nerror: {err_msg}")
+            failed_count += 1
         else:
-            formatted.append(str(r))
+            r_str = str(r)
+            if "status=success" in r_str:
+                success_count += 1
+            elif "status=step_exhausted" in r_str or "status=timeout" in r_str:
+                exhausted_count += 1
+            else:
+                failed_count += 1
+            formatted.append(r_str)
 
-    header = f"[parallel sub-agents · {len(agent_specs)} spawned concurrently]"
+    total = len(agent_specs)
+    if success_count == total:
+        header = f"[parallel sub-agents · {total} spawned concurrently · all {success_count} succeeded]"
+    elif success_count > 0:
+        header = (
+            f"[parallel sub-agents · {total} spawned · {success_count} succeeded, {total - success_count} uncompleted (PARTIAL SUCCESS)]\n"
+            f"[ORCHESTRATOR GUIDANCE: {success_count} sub-agent(s) completed their tasks successfully. "
+            f"Review the results below. DO NOT re-run completed sub-agents. Follow up only on the uncompleted tasks.]"
+        )
+    else:
+        header = f"[parallel sub-agents · {total} spawned concurrently · 0 succeeded]"
+
     return f"{header}\n\n" + "\n\n".join(formatted)
 
 

@@ -356,9 +356,9 @@ async function initSubagentsPanel() {
       const res = await fetch('/control/subagents');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      defaultStepsInput.value = data.subagent_default_steps ?? 10;
-      maxStepsInput.value = data.subagent_max_steps ?? 20;
-      timeoutInput.value = data.subagent_timeout_s ?? 180;
+      defaultStepsInput.value = data.subagent_default_steps ?? 40;
+      maxStepsInput.value = data.subagent_max_steps ?? 80;
+      timeoutInput.value = data.subagent_timeout_s ?? 3600;
       maxParallelInput.value = data.subagent_max_parallel ?? 4;
     } catch (err) {
       console.warn('Failed to load subagent settings:', err);

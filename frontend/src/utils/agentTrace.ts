@@ -213,6 +213,7 @@ export function parseSubagentsFromText(rawText: unknown): any[] {
       let lane = 'default';
       let steps = 0;
       let failure_reason: string | null = null;
+      let files: string[] = [];
 
       const envMatch = blk.match(/\[(?:sub-agent|Sub-agent|critic-actor)\s*·\s*([^\]]+)\]/);
       if (envMatch) {
@@ -221,6 +222,7 @@ export function parseSubagentsFromText(rawText: unknown): any[] {
           if (p.startsWith('role=')) role = p.replace('role=', '');
           else if (p.startsWith('lane=')) lane = p.replace('lane=', '');
           else if (p.startsWith('status=')) status = p.replace('status=', '');
+          else if (p.startsWith('files=')) files = p.replace('files=', '').split(',').map((x) => x.trim()).filter(Boolean);
           else if (p.includes('msgs')) steps = parseInt(p, 10) || 0;
         });
       } else if (blk.includes('error:')) {
@@ -250,6 +252,7 @@ export function parseSubagentsFromText(rawText: unknown): any[] {
         stepsCount: steps,
         failure_reason,
         final_content: body,
+        files,
         steps: [],
       });
     });
@@ -261,12 +264,14 @@ export function parseSubagentsFromText(rawText: unknown): any[] {
     let lane = 'default';
     let steps = 0;
     let failure_reason: string | null = null;
+    let files: string[] = [];
     if (envMatch) {
       const parts = envMatch[1].split('·').map((s) => s.trim());
       parts.forEach((p) => {
         if (p.startsWith('role=')) role = p.replace('role=', '');
         else if (p.startsWith('lane=')) lane = p.replace('lane=', '');
         else if (p.startsWith('status=')) status = p.replace('status=', '');
+        else if (p.startsWith('files=')) files = p.replace('files=', '').split(',').map((x) => x.trim()).filter(Boolean);
         else if (p.includes('msgs')) steps = parseInt(p, 10) || 0;
       });
     }
@@ -285,6 +290,7 @@ export function parseSubagentsFromText(rawText: unknown): any[] {
       stepsCount: steps,
       failure_reason,
       final_content: body,
+      files,
       steps: [],
     });
   }
