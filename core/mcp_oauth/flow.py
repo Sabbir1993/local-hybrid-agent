@@ -52,7 +52,8 @@ def client_name() -> str:
     in config/app.json, else SSL AI."""
     try:
         from ..small_model import APP_CONFIG
-        v = str((APP_CONFIG.get("capabilities") or {}).get("mcp_oauth_client_name") or "").strip()
+        caps = APP_CONFIG.get("capabilities") or {}
+        v = str(caps.get("mcp_oauth_client_name") or APP_CONFIG.get("mcp_oauth_client_name") or "").strip()
     except Exception:
         v = ""
     return v[:80] or DEFAULT_CLIENT_NAME

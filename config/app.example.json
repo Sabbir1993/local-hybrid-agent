@@ -372,6 +372,8 @@
     "screenshot_cloud_vision": false,
     "skills": true,
     "mcp": true,
+    "mcp_oauth_client_name": "SSL AI",
+    "mcp_oauth_redirect_base": "https://chat.sslwireless.com",
     "mcp_write_approval": "tainted",
     "mcp_servers": {
       "echo": {

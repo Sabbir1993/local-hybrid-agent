@@ -19,7 +19,8 @@ from .store import _bg_tasks, _can_manage_global, _connect_in_background, _owner
 
 def _redirect_base() -> str:
     """Public https URL of this app, if the admin set one: enables the server-side callback."""
-    base = str(APP_CONFIG.get("capabilities", {}).get("mcp_oauth_redirect_base") or "").strip().rstrip("/")
+    caps = APP_CONFIG.get("capabilities") or {}
+    base = str(caps.get("mcp_oauth_redirect_base") or APP_CONFIG.get("mcp_oauth_redirect_base") or "").strip().rstrip("/")
     # only the address of the app belongs here: the callback path is added below. A value that already ends in it (copied from
     # the provider's error text) gave /mcp/oauth/callback/mcp/oauth/callback, which the provider cannot match.
     for tail in ("/mcp/oauth/callback", "/oauth/callback", "/mcp"):
@@ -130,6 +131,19 @@ async def oauth_start(name: str, req: OAuthStartReq, request: Request, user: Pri
     from core import companion_bridge
     audit_log(user, action="mcp.oauth.start", resource=f"mcp:{name}",
               permission_key=MANAGE_PERM if owner is None else "chat.use", detail={"scope": req.scope})
+    # 1. An explicitly configured public https redirect base (e.g. https://chat.sslwireless.com)
+    # means the OAuth app at Google/Slack/etc. was registered with this fixed callback URI:
+    # {base}/mcp/oauth/callback. Providers like Google reject random loopback ports with Error 400.
+    base = _redirect_base()
+    if base:
+        try:
+            start = await mcp_oauth.begin(name, owner, scfg, redirect_uri=f"{base}/mcp/oauth/callback")
+        except Exception as e:
+            return JSONResponse({"error": str(e)[:300]}, status_code=502)
+        mcp_oauth.set_status(name, owner, "pending")
+        return {"mode": "redirect", "status": "pending", "auth_url": start["auth_url"]}
+
+    # 2. Companion loopback flow (when no public redirect base is set)
     if companion_bridge.is_connected(user.id):
         mcp_oauth.set_status(name, owner, "pending")
         task = asyncio.create_task(_loopback_flow(user.id, name, owner, scfg))
@@ -137,7 +151,9 @@ async def oauth_start(name: str, req: OAuthStartReq, request: Request, user: Pri
         task.add_done_callback(_bg_tasks.discard)
         return {"mode": "companion", "status": "pending",
                 "message": "Finish signing in in the browser window the companion opened."}
-    base = _redirect_base() or _same_machine_base(request)
+
+    # 3. Same machine or manual copy-paste flow
+    base = _same_machine_base(request)
     if not base:
         return await _manual_start(user, name, owner, scfg)
     try:

@@ -396,7 +396,31 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
     </>
   );
 
-  const renderSessionRow = (s: SessionItem) => (
+  const formatChatTime = (s: SessionItem): string => {
+    const ts = s.last_at || s.createdAt;
+    if (!ts) return s.updatedAt && s.updatedAt !== 'Recent' ? s.updatedAt : '';
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    const now = new Date();
+    const isToday = d.toDateString() === now.toDateString();
+    if (isToday) {
+      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString()) {
+      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays < 7) {
+      return d.toLocaleDateString([], { weekday: 'short' });
+    }
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
+
+  const renderSessionRow = (s: SessionItem) => {
+    const timeStr = formatChatTime(s);
+    return (
     <div
       key={String(s.id)}
       className={`session-row ${s.id === activeSessionId ? 'cur' : ''}`}
@@ -407,6 +431,7 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
       <span
         style={{
           flex: 1,
+          minWidth: 0,
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
@@ -441,6 +466,25 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
       {runningSessions[String(s.id)] && (
         <span title="Still working in the background" aria-label="Running" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--warm, #ffb454)', marginRight: 6, flexShrink: 0, animation: 'pulse-op 1.6s ease-in-out infinite' }} />
       )}
+      {timeStr && (
+        <span
+          className="session-time"
+          style={{
+            fontSize: '10px',
+            color: 'var(--dim)',
+            opacity: 0.65,
+            marginLeft: 'auto',
+            paddingLeft: '6px',
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+            fontVariantNumeric: 'tabular-nums',
+            letterSpacing: '-0.02em',
+          }}
+          title={s.last_at ? new Date(s.last_at).toLocaleString() : s.updatedAt}
+        >
+          {timeStr}
+        </span>
+      )}
       <span
         className="s-menu-wrap"
         onClick={(e) => handleMenuClick(e, s)}
@@ -449,6 +493,7 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
       </span>
     </div>
   );
+  };
 
   if (sidebarCollapsed) {
     return null;

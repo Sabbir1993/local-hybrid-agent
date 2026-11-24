@@ -157,6 +157,7 @@ class OAuthTests(_McpApp):
         scfg = {"transport": "http", "url": "http://x"}
         with mock.patch.object(oauth_endpoints, "_servers_for", lambda owner: {"s": scfg}), \
              mock.patch.object(companion_bridge, "is_connected", lambda uid: True), \
+             mock.patch.object(oauth_endpoints, "_redirect_base", lambda: ""), \
              mock.patch.object(oauth_endpoints, "_loopback_flow", noop):
             r = self.client.post("/mcp/servers/s/oauth/start", json={"scope": "user"})
         self.assertEqual(r.json()["mode"], "companion")
