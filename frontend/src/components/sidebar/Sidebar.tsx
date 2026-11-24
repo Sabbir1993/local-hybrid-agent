@@ -402,20 +402,26 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
     const d = new Date(ts);
     if (isNaN(d.getTime())) return '';
     const now = new Date();
-    const isToday = d.toDateString() === now.toDateString();
-    if (isToday) {
+
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const startOfTarget = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const diffCalendarDays = Math.round((startOfToday - startOfTarget) / (1000 * 60 * 60 * 24));
+
+    if (diffCalendarDays <= 0) {
       return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     }
-    const yesterday = new Date(now);
-    yesterday.setDate(now.getDate() - 1);
-    if (d.toDateString() === yesterday.toDateString()) {
-      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (diffCalendarDays === 1) {
+      return '1 day';
     }
-    const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
-    if (diffDays < 7) {
-      return d.toLocaleDateString([], { weekday: 'short' });
+    if (diffCalendarDays < 30) {
+      return `${diffCalendarDays} days`;
     }
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    if (diffCalendarDays < 365) {
+      const months = Math.floor(diffCalendarDays / 30);
+      return months <= 1 ? '1 month' : `${months} months`;
+    }
+    const years = Math.floor(diffCalendarDays / 365);
+    return years <= 1 ? '1 year' : `${years} years`;
   };
 
   const renderSessionRow = (s: SessionItem) => {
