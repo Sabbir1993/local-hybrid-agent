@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppStore } from './stores/useAppStore';
 import { useStatusWs } from './hooks/useStatusWs';
 import { Sidebar } from './components/sidebar/Sidebar';
@@ -6,7 +6,7 @@ import { Header } from './components/header/Header';
 import { ChatArea } from './components/chat/ChatArea';
 import { Composer } from './components/chat/Composer';
 import { RightDock } from './components/dock/RightDock';
-import { AppLoader, dismissBootLoader } from './components/common/AppLoader';
+import { AppLoader, RouteLogoLoader, dismissBootLoader } from './components/common/AppLoader';
 import { ProjectModal } from './components/modals/ProjectModal';
 import { AgentMemoryModal } from './components/modals/AgentMemory';
 import { AgentModals } from './components/modals/AgentModals';
@@ -21,7 +21,7 @@ import { ProfileModal } from './components/modals/ProfileModal';
 import { LoginPage } from './components/auth/LoginPage';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { logger } from './utils/logger';
-import { loadAppearance } from './utils/appearance';
+import { applyLocalSteps, loadAppearance } from './utils/appearance';
 import { env } from './config/env';
 import { ThemedToast } from './components/common/ThemedToast';
 import { ThemedDialog } from './components/common/ThemedDialog';
@@ -41,6 +41,7 @@ export function App() {
     setActiveModal,
     createSession,
     sessionExpired,
+    appMode,
   } = useAppStore();
 
   useEffect(() => {
@@ -49,7 +50,28 @@ export function App() {
   }, [currentUser, hasPerm]);
 
   // Per-user appearance must survive a refresh (theme-boot.js only knows localStorage).
-  useEffect(() => { void loadAppearance(); }, []);
+  useEffect(() => { applyLocalSteps(); void loadAppearance(); }, []);
+
+  // Expose the active mode so mode-scoped UI rules (e.g. chat-only conversation steps) work.
+  useEffect(() => {
+    document.documentElement.setAttribute('data-app-mode', appMode);
+  }, [appMode]);
+
+  // The settings iframe calls window.parent.applyTheme() after a theme change.
+  // Re-read the saved preferences so the main app updates without a manual refresh.
+  useEffect(() => {
+    (window as any).applyTheme = () => { void loadAppearance(); };
+    return () => { delete (window as any).applyTheme; };
+  }, []);
+
+  // Brief overlay on route changes so the new view's theme/layout does not flash in.
+  const [routeLoading, setRouteLoading] = useState(false);
+  useEffect(() => {
+    setRouteLoading(true);
+    const t = window.setTimeout(() => setRouteLoading(false), 220);
+    return () => window.clearTimeout(t);
+  }, [activeModal]);
+  const routeLoader = routeLoading ? <RouteLogoLoader /> : null;
 
   // apiFetch calls this on any 401 outside the sign-in endpoints
   useEffect(() => {
@@ -225,45 +247,46 @@ export function App() {
 
   if (activeModal === 'settings') {
     return (
-      <ErrorBoundary fallbackTitle="Settings">
+      <>{routeLoader}<ErrorBoundary fallbackTitle="Settings">
         <SettingsModal />
-      </ErrorBoundary>
+      </ErrorBoundary></>
     );
   }
 
   if (activeModal === 'report') {
     return (
-      <ErrorBoundary fallbackTitle="Token Usage Report">
+      <>{routeLoader}<ErrorBoundary fallbackTitle="Token Usage Report">
         <ReportModal />
-      </ErrorBoundary>
+      </ErrorBoundary></>
     );
   }
 
   if (activeModal === 'audit') {
     return (
-      <ErrorBoundary fallbackTitle="Security & Audit Logs">
+      <>{routeLoader}<ErrorBoundary fallbackTitle="Security & Audit Logs">
         <AuditModal />
-      </ErrorBoundary>
+      </ErrorBoundary></>
     );
   }
 
   if (activeModal === 'db') {
     return (
-      <ErrorBoundary fallbackTitle="Database Explorer">
+      <>{routeLoader}<ErrorBoundary fallbackTitle="Database Explorer">
         <DbModal />
-      </ErrorBoundary>
+      </ErrorBoundary></>
     );
   }
 
   if (activeModal === 'profile') {
     return (
-      <ErrorBoundary fallbackTitle="User Profile">
+      <>{routeLoader}<ErrorBoundary fallbackTitle="User Profile">
         <ProfileModal onClose={() => setActiveModal('none')} />
-      </ErrorBoundary>
+      </ErrorBoundary></>
     );
   }
 
   return (
+    <>{routeLoader}
     <div id="app" className={sidebarCollapsed ? 'sidebar-collapsed' : ''}>
       <ErrorBoundary fallbackTitle="Sidebar">
         <Sidebar />
@@ -293,6 +316,7 @@ export function App() {
       <ThemedToast />
       <ErrorBoundary fallbackTitle="Dialog"><ThemedDialog /></ErrorBoundary>
     </div>
+    </>
   );
 }
 

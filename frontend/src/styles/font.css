@@ -1,0 +1,49 @@
+/* Appearance → Contrast: Strong raises the weight of secondary text and borders. */
+html.contrast-strong {
+  --dim: color-mix(in srgb, var(--text) 88%, var(--bg));
+  --text-muted: color-mix(in srgb, var(--text) 82%, var(--bg));
+  --border: color-mix(in srgb, var(--text) 42%, transparent);
+  --border-subtle: color-mix(in srgb, var(--text) 28%, transparent);
+  --scrollbar: color-mix(in srgb, var(--text) 35%, transparent);
+  --scrollbar-hover: color-mix(in srgb, var(--text) 55%, transparent);
+}
+html.contrast-strong .ap-code-preview,
+html.contrast-strong .bubble,
+html.contrast-strong .panel {
+  border-color: color-mix(in srgb, var(--text) 30%, transparent);
+}
+
+/* User-selected UI font (Appearance → Font). Kept last in the cascade so it wins
+   over the base body rules in style.css / claude-ui.css. Code and .mono elements
+   keep their own monospace stacks. */
+:root {
+  --font-ui: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+html[data-font="system"] {
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+html[data-font="mono"] {
+  --font-ui: "JetBrains Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+}
+html[data-font="google"] {
+  --font-ui: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+}
+
+html[data-font] body,
+html[data-font] #app,
+html[data-font] #settings-page,
+html[data-font] button,
+html[data-font] input,
+html[data-font] textarea,
+html[data-font] select {
+  font-family: var(--font-ui);
+}
+
+/* Code blocks and explicitly monospace data stay monospace. */
+html[data-font] code,
+html[data-font] pre,
+html[data-font] kbd,
+html[data-font] .mono,
+html[data-font] [class*="mono"] {
+  font-family: var(--font-mono, "JetBrains Mono", Consolas, monospace);
+}

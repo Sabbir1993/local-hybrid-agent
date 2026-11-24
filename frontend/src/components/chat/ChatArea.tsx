@@ -385,6 +385,12 @@ export const ChatArea: React.FC = () => {
   const isUserScrolledUp = useRef<boolean>(false);
   const [showJump, setShowJump] = useState(false);
   const isChatMode = appMode === 'chat';
+  const [stepsNonce, setStepsNonce] = useState(0);
+  useEffect(() => {
+    const onSteps = () => setStepsNonce((n) => n + 1);
+    window.addEventListener('a770-appearance-changed', onSteps);
+    return () => window.removeEventListener('a770-appearance-changed', onSteps);
+  }, []);
   // typing in the composer: the jump button hides (it floated over the text box and the keyboard); it returns when focus leaves
   const [inputFocused, setInputFocused] = useState(false);
   useEffect(() => {
@@ -974,7 +980,7 @@ export const ChatArea: React.FC = () => {
                       <BotContent
                         id={String(m.id)}
                         follow={answering}
-                        html={renderCached(answering ? null : `${m.id}|${contentText.length}|${thinkingText.length}|${(m.acts || []).length}|${m.secs || 0}|${isChatMode}|${qz ? 'q' : ''}`, () => renderCompleteChatMessage(qz ? qz.prose : contentText, m.acts, m.secs, isChatMode, thinkingText, answering))}
+                        html={renderCached(answering ? null : `${m.id}|${contentText.length}|${thinkingText.length}|${(m.acts || []).length}|${m.secs || 0}|${isChatMode}|${qz ? 'q' : ''}|${document.documentElement.getAttribute('data-conversation-steps') || ''}|${stepsNonce}`, () => renderCompleteChatMessage(qz ? qz.prose : contentText, m.acts, m.secs, isChatMode, thinkingText, answering))}
                       />
                       )}
                       <AnswerBadge m={m} />

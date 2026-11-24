@@ -6,6 +6,7 @@
 @import './styles/knowledge.css';
 @import './styles/telemetry.css';
 @import './styles/responsive.css';
+@import './styles/font.css';
 
 @tailwind base;
 @tailwind components;

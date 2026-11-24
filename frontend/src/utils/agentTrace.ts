@@ -587,7 +587,7 @@ export function traceSegments(acts: any[]): Segment[] {
  * HTML for the whole trace. `prose` turns a narration into sanitized markdown (passed in so this file stays free of
  * the markdown setup). `live`: the reply is still streaming, so the newest group stays open.
  */
-export function renderAgentTraceHtml(acts: any[], prose: (md: string) => string, live = false, workedFor = ''): string {
+export function renderAgentTraceHtml(acts: any[], prose: (md: string) => string, live = false, workedFor = '', collapsed = false): string {
   const segs = traceSegments(acts || []);
   if (!segs.length) return '';
   const lastGroup = segs.map((s) => s.kind).lastIndexOf('group');
@@ -598,7 +598,7 @@ export function renderAgentTraceHtml(acts: any[], prose: (md: string) => string,
       h += `<div class="ct-prose">${prose(s.text)}</div>`;
     } else if (s.items.length) {
       // Live streaming keeps latest active group open; finished tool groups default collapsed
-      const shouldOpen = live && (i === lastGroup);
+      const shouldOpen = !collapsed && live && (i === lastGroup);
       h += groupHtml(s.items, shouldOpen);
     }
   });

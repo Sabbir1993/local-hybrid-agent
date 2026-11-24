@@ -1,8 +1,17 @@
 /* Start-up loader and inline spinner. Colours come from the active theme variables. */
+/* Logo-only: the HTML boot loader in index.html keeps its text nodes for
+   accessibility updates, but they are not displayed. */
+#boot-text, #boot-sub { display: none !important; }
 .app-loader {
   position: fixed; inset: 0; z-index: 99999; display: flex; align-items: center; justify-content: center;
   background: var(--bg, #0d1117); overflow: hidden;
 }
+/* Route transitions: same logo, quicker entrance, above modal chrome. */
+.route-logo-loader { z-index: 100001; background: var(--bg, #0d1117); }
+.route-logo-loader .app-loader-card { animation-duration: .18s; }
+.route-logo-loader .app-loader-step { animation: none; }
+.route-logo-loader .app-loader-ring { animation-duration: 1s; }
+.route-logo-loader .app-loader-ring-slow { animation-duration: 1.4s; }
 .app-loader-glow {
   position: absolute; width: 520px; height: 520px; border-radius: 50%;
   background: radial-gradient(circle, var(--accent, #58a6ff) 0%, transparent 65%);

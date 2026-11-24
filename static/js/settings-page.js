@@ -278,8 +278,11 @@ async function loadDevicesPanel() {
 // Standalone page (opened by a direct link such as /settings#sec-lanes, e.g. in the companion window): offer a way back.
 // Inside the Settings modal the page is an iframe and the modal has its own close, so the button stays hidden there.
 (function () {
-  const home = document.getElementById('settings-home');
-  if (home && window.self === window.top) home.hidden = false;
+  // settings-nav.js already made the nav visible in standalone mode from <head>.
+  if (window.self === window.top) {
+    const refresh = document.getElementById('settings-refresh');
+    if (refresh) refresh.onclick = () => window.location.reload();
+  }
 })();
 
 // --- Look and feel helpers (see settings-pro.css): nothing here changes what a setting does ---
@@ -473,14 +476,24 @@ window.initSubagentsPanel = initSubagentsPanel;
     status.style.color = bad ? '#f43f5e' : '';
   };
 
+  const mix = (a, b, t) => {
+    const parse = h => { const v = String(h || '').replace('#', ''); return [0, 2, 4].map(i => parseInt(v.slice(i, i + 2), 16) || 0); };
+    const x = parse(a), y = parse(b);
+    return '#' + x.map((c, i) => Math.round(c + (y[i] - c) * t).toString(16).padStart(2, '0')).join('');
+  };
+
   function apply(p) {
     prefs = p;
+    try { localStorage.setItem('a770_appearance', JSON.stringify(p)); } catch (_) {}
     root.setAttribute('data-mode', p.mode);
     root.setAttribute('data-font', p.font);
+    root.setAttribute('data-conversation-steps', p.conversation_steps || 'default');
     root.classList.toggle('contrast-strong', p.contrast === 'strong');
-    root.style.setProperty('--bg', p.background);
-    root.style.setProperty('--text', p.foreground);
-    root.style.setProperty('--accent', p.accent);
+    // Background / Foreground / Accent are CODE-PREVIEW colours only. The theme
+    // itself comes from the selected preset (data-theme) and must not be overridden.
+    root.style.setProperty('--code-bg', p.background);
+    root.style.setProperty('--code-fg', p.foreground);
+    root.style.setProperty('--code-accent', p.accent);
     root.style.fontSize = p.font_size + 'px';
     const effective = p.mode === 'light'
       ? (p.theme.indexOf('light') >= 0 ? p.theme : 'light')
@@ -502,16 +515,19 @@ window.initSubagentsPanel = initSubagentsPanel;
   }
 
   async function save(patch) {
+    // Apply locally first — the UI must never wait on the account API.
+    const next = { ...(prefs || {}), ...(patch || {}) };
+    apply(next);
+    toast('Appearance saved', false);
     try {
       const r = await fetch('/control/appearance', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch || prefs || {}),
+        body: JSON.stringify(next),
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
-      apply(data);
-      toast('Appearance saved for your account', false);
-    } catch (e) { toast('Could not save appearance: ' + e.message, true); }
+      if (!r.ok) return;                       // local choice stays active
+      const data = await r.json().catch(() => null);
+      if (data) apply(data);
+    } catch (_) { /* offline / backend not restarted: local preference is enough */ }
   }
   window.saveAppearance = save;
 
@@ -548,10 +564,15 @@ window.initSubagentsPanel = initSubagentsPanel;
     panel.querySelectorAll('[' + attr + ']').forEach(b => b.classList.toggle('active', b === btn));
     save(collect());
   });
-  const saveBtn = document.getElementById('ap-save');
-  if (saveBtn) saveBtn.onclick = () => save(collect());
-
-  fetch('/control/appearance').then(r => r.ok ? r.json() : null).then(d => { if (d) apply(d); }).catch(() => {});
+  const localPrefs = (() => { try { return JSON.parse(localStorage.getItem('a770_appearance') || 'null'); } catch (_) { return null; } })();
+  if (localPrefs) apply(localPrefs);
+  fetch('/control/appearance').then(r => r.ok ? r.json() : null).then(d => {
+    if (d) {
+      apply(d);
+    } else if (!localPrefs) {
+      toast('Using locally saved appearance', false);
+    }
+  }).catch(() => { if (!localPrefs) toast('Using locally saved appearance', false); });
 })();
 
 // Account panels: profile readout and password change (moved out of the user menu).
@@ -613,12 +634,39 @@ window.initSubagentsPanel = initSubagentsPanel;
 
   const btn = document.getElementById('pwd-save-btn');
   const status = document.getElementById('pwd-status');
+  const policy = document.getElementById('pwd-policy');
+  const newPwd = document.getElementById('pwd-new');
+  const confirmPwd = document.getElementById('pwd-confirm');
+  const identity = ((u.display_name || '') + ' ' + (u.email || u.username || '')).toLowerCase();
+
+  const updatePolicy = () => {
+    if (!policy) return;
+    const v = newPwd?.value || '';
+    const rules = {
+      length: v.length >= 12,
+      letter: /[A-Za-z]/.test(v),
+      digit: /\d/.test(v),
+      match: !!v && v === (confirmPwd?.value || ''),
+      identity: !v || !identity.includes(v.toLowerCase()),
+    };
+    policy.querySelectorAll('[data-rule]').forEach(el => {
+      const ok = rules[el.getAttribute('data-rule')];
+      el.classList.toggle('ok', !!ok);
+      el.classList.toggle('bad', !ok && (v.length > 0 || el.getAttribute('data-rule') === 'match'));
+    });
+  };
+  [newPwd, confirmPwd].forEach(el => { if (el) el.addEventListener('input', updatePolicy); });
+  updatePolicy();
+
   if (!btn) return;
   btn.onclick = async () => {
     const cur = document.getElementById('pwd-current')?.value || '';
     const next = document.getElementById('pwd-new')?.value || '';
     const confirm = document.getElementById('pwd-confirm')?.value || '';
     if (next !== confirm) { status.textContent = 'New passwords do not match.'; status.style.color = '#f43f5e'; return; }
+    if (next.length < 12 || !/[A-Za-z]/.test(next) || !/\d/.test(next) || identity.includes(next.toLowerCase())) {
+      status.textContent = 'New password does not meet the policy below.'; status.style.color = '#f43f5e'; return;
+    }
     btn.disabled = true;
     status.textContent = 'Saving…';
     try {

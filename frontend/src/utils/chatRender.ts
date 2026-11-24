@@ -382,8 +382,11 @@ export function renderCompleteChatMessage(content: string, acts?: any[], secs?: 
   if (!content && (!acts || !acts.length) && !thinking) return '';
 
   let actsHtml = '';
-  // Chat mode shows the answer only: no tool calls, no thinking trace. Agent and Code modes show the work.
-  if (!isChatMode) {
+  // Chat mode shows the answer only by default. With Conversation Steps = Verbose,
+  // chat also shows the work (tool calls / results), like Agent and Code modes.
+  const verboseSteps = typeof document !== 'undefined'
+    && document.documentElement.getAttribute('data-conversation-steps') === 'verbose';
+  if (!isChatMode || verboseSteps) {
     // only these act types draw anything; lane / step / plan / stopped records must not produce an empty block
     let finalActs = acts ? acts.filter((a) => ['thought', 'reasoning', 'tool_call', 'tool_result', 'narration'].includes(a.type)) : [];
     if (thinking && thinking.trim() && !finalActs.some((a) => a.type === 'thought' || a.type === 'reasoning')) {
@@ -392,7 +395,8 @@ export function renderCompleteChatMessage(content: string, acts?: any[], secs?: 
     if (finalActs.length) {
       const prose = (md: string) => sanitizeHtml(marked.parse(transformMarkdownSpecialTokens(md), { async: false }) as string);
       actsHtml = renderAgentTraceHtml(finalActs, prose, live,
-        finalActs.some((a) => a.type === 'tool_call') ? buildAntigravityWorkedFor(finalActs, secs) : '');
+        finalActs.some((a) => a.type === 'tool_call') ? buildAntigravityWorkedFor(finalActs, secs) : '',
+        /* collapsed */ isChatMode && verboseSteps);
     }
   }
 

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Settings — Local Agent</title>
 <script src="/static/js/theme-boot.js?v=1.2"></script>
+<script src="/static/js/settings-nav.js?v=1.0"></script>
 <link rel="stylesheet" href="/static/css/style.css?v=5.18">
 <link rel="stylesheet" href="/static/css/lanes.css?v=1.3">
 <link rel="stylesheet" href="/static/css/knowledge.css?v=1.0">
@@ -146,10 +147,15 @@
   .tab-icon {
     font-size: 13.5px;
     width: 18px;
+    height: 18px;
     display: inline-flex;
+    align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    color: var(--dim);
   }
+  .settings-tab-btn.active .tab-icon { color: var(--accent); }
+  .tab-icon svg { flex: 0 0 auto; }
   .tab-label {
     flex: 1;
     overflow: hidden;
@@ -194,6 +200,17 @@
     line-height: 1.4;
   }
   .settings-hidden-note { color: var(--dim); font-size: 11px; padding: 10px; text-align: center; }
+  /* Appearance → Contrast: same strong-contrast behaviour inside settings. */
+  html.contrast-strong { --dim: var(--text); --text-muted: var(--text); --border: color-mix(in srgb, var(--text) 42%, transparent); --border-subtle: color-mix(in srgb, var(--text) 28%, transparent); }
+  /* Appearance → Font: same UI font behaviour inside the settings page/iframe. */
+  html[data-font="system"] body, html[data-font="system"] button, html[data-font="system"] input, html[data-font="system"] select, html[data-font="system"] textarea { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  html[data-font="mono"] body, html[data-font="mono"] button, html[data-font="mono"] input, html[data-font="mono"] select, html[data-font="mono"] textarea { font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace; }
+  html[data-font="google"] body, html[data-font="google"] button, html[data-font="google"] input, html[data-font="google"] select, html[data-font="google"] textarea { font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif; }
+  html[data-font] code, html[data-font] pre, html[data-font] .mono { font-family: var(--font-mono, "JetBrains Mono", Consolas, monospace); }
+  #settings-standalone-nav { display: none; align-items: center; gap: 6px; }
+  .settings-top #settings-standalone-nav { display: flex; }
+  .settings-refresh { margin-left: auto; width: 28px; height: 28px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--panel2); color: var(--dim); font-size: 14px; cursor: pointer; }
+  .settings-refresh:hover { color: var(--text); background: var(--panel); }
   /* Appearance & Themes — per-user display preferences */
   #sec-profile .ap-profile-head { display: flex; align-items: center; gap: 14px; padding: 14px 12px; border-bottom: 1px solid var(--border-subtle); }
   #sec-profile .ap-avatar { width: 56px; height: 56px; flex: 0 0 56px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; background: var(--accent-bg); border: 1px solid var(--border-subtle); color: var(--accent); font-weight: 700; font-size: 18px; }
@@ -220,8 +237,31 @@
   #sec-theme .theme-opt.active .theme-sym { background: var(--accent); border-color: var(--accent); color: #fff; }
   #sec-theme .ap-group-label { margin: 18px 0 8px; font-size: 11.5px; font-weight: 600; color: var(--dim); }
   #sec-theme .ap-rows { border: 1px solid var(--border-subtle); border-radius: 9px; overflow: hidden; }
-  #sec-theme .ap-set-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 9px 12px; }
-  #sec-theme .ap-set-row + .ap-set-row { border-top: 1px solid var(--border-subtle); }
+  #sec-theme .ap-set-row, #sec-profile .ap-set-row, #sec-password .ap-set-row {
+    display: grid; grid-template-columns: minmax(110px, 160px) minmax(0, 1fr);
+    align-items: center; gap: 14px; padding: 10px 12px;
+  }
+  #sec-theme .ap-set-row > select {
+    width: auto; min-width: 190px; max-width: 230px; justify-self: end;
+    padding: 5px 9px; font-size: 11.5px;
+  }
+  #sec-profile .ap-set-row > input, #sec-password .ap-set-row > input {
+    width: 100%; min-width: 240px; justify-self: stretch;
+    padding: 7px 10px; font-size: 12px;
+  }
+  #sec-profile .ap-set-row > span.mono { justify-self: stretch; padding: 7px 0; }
+  #sec-theme .ap-actions .btn, #sec-profile .ap-actions .btn, #sec-password .ap-actions .btn {
+    width: auto; min-width: 0; padding: 6px 14px; font-size: 11.5px;
+  }
+  #sec-theme .ap-actions, #sec-profile .ap-actions, #sec-password .ap-actions { justify-content: flex-end; }
+  #sec-password .ap-policy { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 10px 0 2px; padding: 0 12px 12px; font-size: 11px; color: var(--dim); }
+  #sec-password .ap-policy span::before { content: "○"; margin-right: 5px; }
+  #sec-password .ap-policy span.ok { color: var(--green); }
+  #sec-password .ap-policy span.ok::before { content: "●"; }
+  #sec-password .ap-policy span.bad { color: var(--red); }
+  #sec-password .ap-policy span.bad::before { content: "●"; }
+  #sec-theme .ap-set-row .ap-segmented, #sec-theme .ap-color-row { justify-self: end; }
+  #sec-theme .ap-set-row + .ap-set-row, #sec-profile .ap-set-row + .ap-set-row, #sec-password .ap-set-row + .ap-set-row { border-top: 1px solid var(--border-subtle); }
   #sec-theme .ap-set-row > label { font-size: 12.5px; font-weight: 600; color: var(--text); }
   #sec-theme .ap-set-row select, #sec-theme .ap-set-row input[type="text"] {
     min-width: 150px; padding: 4px 8px; border: 1px solid var(--border-subtle); border-radius: 6px;
@@ -231,7 +271,8 @@
   #sec-theme .ap-color-row input[type="color"] { width: 26px; height: 24px; padding: 0; border: 1px solid var(--border-subtle); border-radius: 5px; background: transparent; cursor: pointer; }
   #sec-theme .ap-color-row input[type="text"] { width: 90px; min-width: 90px; }
   #sec-theme .ap-color-row span { font-size: 10.5px; }
-  #sec-theme .ap-code-preview { margin: 0; padding: 12px 14px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-code); font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace; font-size: 11.5px; line-height: 1.6; color: var(--text); overflow-x: auto; }
+  #sec-theme .ap-code-preview { margin: 0; padding: 12px 14px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--code-bg, var(--bg-code)); font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace; font-size: 11.5px; line-height: 1.6; color: var(--code-fg, var(--text)); overflow-x: auto; }
+  #sec-theme .ap-code-preview .tk-kw { color: var(--code-accent, #c792ea); }
   #sec-theme .ap-code-preview code { font: inherit; color: inherit; }
   #sec-theme .ap-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 16px; }
   #sec-theme .ap-actions .btn { width: auto; }
@@ -408,106 +449,109 @@
     <!-- Left Navigation Rail -->
     <aside id="settings-sidebar">
       <!-- only for the standalone page (settings-page.js unhides it); inside the Settings modal the modal's own close is used -->
-      <a id="settings-home" class="settings-home" href="/" hidden>
-        <span class="tab-icon">←</span><span class="tab-label">Back to chat</span>
-      </a>
+      <div id="settings-standalone-nav" class="settings-standalone-nav">
+        <a id="settings-home" class="settings-home" href="/">
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></span><span class="tab-label">Back to chat</span>
+        </a>
+        <button type="button" id="settings-refresh" class="settings-refresh" title="Refresh settings" aria-label="Refresh settings">⟳</button>
+      </div>
       <div class="settings-search-wrap">
         <input type="search" id="settings-tab-search" name="settings-filter" placeholder="Search settings…" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-bwignore data-form-type="other">
       </div>
       <nav id="settings-nav">
         <div class="settings-group-label">General</div>
         <button type="button" class="settings-tab-btn active" data-tab="sec-theme">
-          <span class="tab-icon">🎨</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r=".7"/><circle cx="17.5" cy="10.5" r=".7"/><circle cx="8.5" cy="7.5" r=".7"/><circle cx="6.5" cy="12.5" r=".7"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c1 0 1.7-.8 1.7-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.1 0-.9.7-1.7 1.7-1.7h2C20.6 16.3 23 13.7 23 10.5 23 6 18.5 2 12 2Z"/></svg></span>
           <span class="tab-label">Appearance &amp; Themes</span>
         </button>
 
         <button type="button" class="settings-tab-btn" data-tab="sec-profile">
-          <span class="tab-icon">👤</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="8" r="4"/></svg></span>
           <span class="tab-label">Profile</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-password">
-          <span class="tab-icon">🔑</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14 9l2 2"/></svg></span>
           <span class="tab-label">Change password</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-mfa">
-          <span class="tab-icon">🔐</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>
           <span class="tab-label">Two-Factor Auth</span>
         </button>
 
         <div class="settings-group-label">Hardware &amp; Models</div>
         <button type="button" class="settings-tab-btn" data-tab="sec-sampling" data-perm="settings.runtime.view">
-          <span class="tab-icon">🎛️</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></svg></span>
           <span class="tab-label">Chat &amp; Sampling</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-live-monitor" data-perm="monitor.view">
-          <span class="tab-icon">📊</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></span>
           <span class="tab-label">Realtime Monitor &amp; VRAM</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-cfg" data-perm="model.local.configure">
-          <span class="tab-icon">⚙️</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3v-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3h4v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4h-.2a1.7 1.7 0 0 0-1.6 1Z"/></svg></span>
           <span class="tab-label">Model Launch Config</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-lanes">
-          <span class="tab-icon">🧭</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5 5-2Z"/></svg></span>
           <span class="tab-label">Models &amp; Jobs</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-cloud" data-perm="settings.orchestration.configure">
-          <span class="tab-icon">☁️</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19a4.5 4.5 0 0 0 .5-9 6 6 0 0 0-11.6 1.5A3.5 3.5 0 0 0 7 19h10.5Z"/></svg></span>
           <span class="tab-label">Cloud Models</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-devices">
-          <span class="tab-icon">💻</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
           <span class="tab-label">Companion Devices</span>
         </button>
 
         <div class="settings-group-label">Agent Capabilities</div>
         <button type="button" class="settings-tab-btn" data-tab="sec-custom-agents">
-          <span class="tab-icon">🤖</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 14h.01M15 14h.01M9 18h6"/></svg></span>
           <span class="tab-label">My Agents</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-caps" data-perm-any="settings.orchestration.configure memory.use">
-          <span class="tab-icon">🧩</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h3v3a2 2 0 1 0 4 0V3h3v4h-2a2 2 0 1 0 0 4h2v4h-3a2 2 0 1 0-4 0h3v4H9v-3a2 2 0 1 0-4 0H3v-4h2a2 2 0 1 0 0-4H3V7h2a2 2 0 1 0 4 0V3Z"/></svg></span>
           <span class="tab-label">Capabilities</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-subagents">
-          <span class="tab-icon">👥</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
           <span class="tab-label">Sub-Agents</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-knowledge" data-perm="knowledge.manage">
-          <span class="tab-icon">📚</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg></span>
           <span class="tab-label">Knowledge Base</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-guard" data-perm="settings.input_guard">
-          <span class="tab-icon">🛡️</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg></span>
           <span class="tab-label">Input/Output Sanitizer</span>
         </button>
 
         <div class="settings-group-label">System &amp; Administration</div>
         <button type="button" class="settings-tab-btn" data-tab="sec-users" data-perm="users.manage">
-          <span class="tab-icon">👤</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="8" r="4"/></svg></span>
           <span class="tab-label">Users &amp; Roles</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-session" data-perm="users.manage">
-          <span class="tab-icon">⏱️</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
           <span class="tab-label">Session Security</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-speech" data-perm="speech.manage">
-          <span class="tab-icon">🎙️</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg></span>
           <span class="tab-label">Voice Collection</span>
         </button>        <button type="button" class="settings-tab-btn" data-tab="sec-runner" data-perm="users.manage">
-          <span class="tab-icon">🧪</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/><path d="M7 15h10"/></svg></span>
           <span class="tab-label">Code Runner</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-db" data-perm="database.manage">
-          <span class="tab-icon">🗄️</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span>
           <span class="tab-label">Database Explorer</span>
         </button>
         <button type="button" class="settings-tab-btn" data-tab="sec-network" data-perm="security.network_policy">
-          <span class="tab-icon">🌐</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.7 3.9 5.7 3.9 9S14.6 18.3 12 21c-2.6-2.7-3.9-5.7-3.9-9S9.4 5.7 12 3Z"/></svg></span>
           <span class="tab-label">Network Access</span>
         </button>
         <button type="button" class="settings-tab-btn tab-danger" data-tab="sec-danger" data-perm="system.danger_zone">
-          <span class="tab-icon">⚠️</span>
+          <span class="tab-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg></span>
           <span class="tab-label">Danger Zone</span>
         </button>
       </nav>
@@ -564,7 +608,7 @@
 <span class="tk-kw">const</span> greet = (<span class="tk-var">name</span>: <span class="tk-kw">string</span>) =&gt; {
   <span class="tk-kw">return</span> <span class="tk-str">`Hello, ${name}!`</span>;
 };</code></pre>
-        <div class="ap-actions"><span id="appearance-status" class="dim"></span><button type="button" class="btn primary" id="ap-save">Save changes</button></div>
+        <div class="ap-actions"><span id="appearance-status" class="dim">Changes save automatically</span></div>
       </div>
 
       <!-- Account: Profile -->
@@ -600,6 +644,13 @@
           <div class="ap-set-row"><label for="pwd-current">Current password</label><input type="password" id="pwd-current" autocomplete="current-password"></div>
           <div class="ap-set-row"><label for="pwd-new">New password</label><input type="password" id="pwd-new" autocomplete="new-password"></div>
           <div class="ap-set-row"><label for="pwd-confirm">Confirm new password</label><input type="password" id="pwd-confirm" autocomplete="new-password"></div>
+        </div>
+        <div class="ap-policy" id="pwd-policy">
+          <span data-rule="length">At least 12 characters</span>
+          <span data-rule="letter">Contains a letter</span>
+          <span data-rule="digit">Contains a digit</span>
+          <span data-rule="match">Passwords match</span>
+          <span data-rule="identity">Not your name or email</span>
         </div>
         <div class="ap-actions"><span id="pwd-status" class="dim"></span><button type="button" class="btn primary" id="pwd-save-btn">Save password</button></div>
       </div>
@@ -1554,14 +1605,14 @@
 
 <div id="toast"></div>
 
-<script src="/static/js/session.js?v=1.4"></script>
+<script src="/static/js/session.js?v=1.5"></script>
 <script src="/static/js/theme.js?v=2.8"></script>
 <script src="/static/vendor/marked.umd.js" integrity="sha384-IvVdUXkhyoD0shbjhiiOnuiTbervTaB0VJcnEcg3shUAMVOOF6lKj4ozJrCwvz6s" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="/static/vendor/purify.min.js" integrity="sha384-a7SzOxErzJ3ZpQz0zJ32d67dSitNzPcbfybc/ykU9KJhMgZkwqfSxlhhdJRS+XGL" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="/static/js/utils.js?v=3.2"></script>
+<script src="/static/js/utils.js?v=3.3"></script>
 <script src="/static/js/markdown.js?v=1.1"></script>
 <script src="/static/js/sampling.js?v=1.3"></script>
-<script src="/static/js/gpu-status.js?v=3.5"></script>
+<script src="/static/js/gpu-status.js?v=3.6"></script>
 <script src="/static/js/config.js?v=3.6"></script>
 <script src="/static/js/runtime-config.js?v=1.0"></script>
 <script src="/static/js/controls.js?v=3.0"></script>
@@ -1583,7 +1634,7 @@
 <script src="/static/js/projects.js?v=1.0"></script>
 <script src="/static/js/custom-agents.js?v=2.0"></script>
 <script src="/static/js/telemetry-dashboard.js?v=1.0"></script>
-<script src="/static/js/settings-page.js?v=1.4"></script>
+<script src="/static/js/settings-page.js?v=1.8"></script>
 <script src="/static/js/password-toggle.js?v=1.2"></script>
 </body>
 </html>
