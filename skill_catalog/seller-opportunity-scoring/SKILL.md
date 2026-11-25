@@ -19,6 +19,9 @@ Builds the `Opportunities` sheet for read_skill(account-intelligence-workbook). 
 | Rank | Product | Target department | Evidence (fact + Source ID) | Fit (1-5) | Urgency (1-5) | Budget signal (1-5) | Competitor risk (1-5) | Score | Priority | Next step |
 Weights live in a small input table on the same sheet (yellow cells, editable), e.g. Fit 35%, Urgency 25%, Budget 25%, Competitor risk 15% (inverse). Defaults are a starting point: say so in a `note:`.
 
+## Row offset
+If the sheet uses `banner:` (+ `subtitle:`) the header is on row 3 (banner only) or 4 (banner + subtitle) and data row n is at `header + n`. Every formula below must use the real rows; the examples use `r` for "the current row" and `F`/`L` for the first/last data row.
+
 ## Formulas (the score and rank are never typed)
 - Score = `=ROUND(Fit*w_fit + Urgency*w_urg + Budget*w_bud + (6-Risk)*w_risk, 2)` using named ranges for weights (`name: w_fit = Opportunities!<cell>`).
 - Rank = `=RANK(<score cell>, <score column range>)`; ties broken by adding a tiny row-based term: `=<score>+ROW()/100000` in a helper column if needed.

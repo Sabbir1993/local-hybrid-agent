@@ -47,7 +47,11 @@ Account type guides defaults: bank/FI -> Digital Channels, IT Budget, Procuremen
 Follow read_skill(account-research). Collect facts into rows of: `Metric | Value | As of | Trend | Why it matters to {seller} | Source ID | Status`. Source IDs and Status follow read_skill(account-source-register).
 
 ## 3. Outline skeleton (workbook builder)
-Rules of the builder: each `## Sheet:` starts with its table header in row 1 (freeze row 1); directives (`format:`, `highlight:`, `validate:`, `widths:`, `freeze:`, `note:`) go after the table. If the builder reports a warning, fix the outline and rebuild; do not ignore it.
+Rules of the builder:
+- Each `## Sheet:` holds one table; directives (`format:`, `highlight:`, `validate:`, `widths:`, `freeze:`, `input:`, `note:`) go after the table. If the builder reports a warning, fix the outline and rebuild; do not ignore it.
+- **Report layout (use on every data sheet):** `banner: <sheet title>` and `subtitle: <unit, basis, period>` lines go right under `## Sheet:` and render as merged title rows. `| >> SECTION NAME | | |` inside a table is a merged section band. `input: Col1, Col2` marks columns the reader may change (yellow fill, blue text).
+- **Row offset (critical for formulas):** header row = 1 with no banner, 3 with a banner only, 4 with banner + subtitle. Data row n is at row `header + n`; a section band counts as a data row. Example with banner + subtitle: band = row 5, first metric = row 6. Write every formula and every cross-sheet reference with these real row numbers, and re-check them after the table is final.
+- `widths:` accepts header names or letters (`widths: Metric=34, B=12`).
 
 ```
 # {account} - Strategic Account Intelligence
@@ -68,14 +72,21 @@ kpi: Top opportunity score = =MAX('Opportunities'!<score column range>)
 kpi: Data coverage = =COUNTIF(<status col>,"Verified")/COUNTA(<status col>) | format=percent
 note: Figures update when the detail sheets change.
 ## Sheet: Financials
+banner: Financial performance - {account}
+subtitle: Unit: <currency, scale>; basis: <consolidated/standalone>; source IDs in column <Source ID>
 | Metric | Unit | <Year 1> | ... | <Year N> | Source ID | Status |
 |---|---|---|---|---|---|---|
+| >> INCOME STATEMENT | | | | | | |
 | Revenue | <unit> | <value or Not disclosed> | ... |
 | Operating cost | ... |
-| Operating profit | <unit> | =<rev>-<cost> | ... |
-| Margin | % | =<profit>/<rev> | ... |
+| Operating profit | <unit> | =C6-C7 | ... |
+| Margin | % | =C8/C6 | ... |
+input: <Year 1>, <Year N>
 chart: line | title=<metric> trend | x=Metric | y=<year columns>
+(rows above assume banner + subtitle: header row 4, band row 5, Revenue row 6, Operating cost row 7, Operating profit row 8)
 ## Sheet: <Module>
+banner: <Module title>
+subtitle: <what the sheet shows, period, unit>
 | Metric | Value | As of | Trend | Why it matters to {seller} | Source ID | Status |
 |---|---|---|---|---|---|---|
 | ... |

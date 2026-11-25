@@ -31,6 +31,20 @@ A dashboard sheet has no table: KPI tiles (big numbers that point at the data wi
     chart: line | source=Sales | x=Date | y=Revenue | title=Revenue over time
     note: Figures update when the Sales sheet changes.
 
+A data sheet can carry a report layout above its table (all optional, per sheet):
+
+    ## Sheet: Financials
+    banner: 02 - Financial performance          (merged title row, accent fill)
+    subtitle: Unit: USD millions, consolidated  (merged note row)
+    | Metric | FY2024 | FY2025 |
+    |---|---|---|
+    | >> INCOME STATEMENT | | |                 (section band, merged across the table)
+    | Revenue | 100 | 120 |
+    input: FY2024, FY2025                       (yellow fill + blue text: cells the reader may change)
+
+The header row is 1 without a banner, 3 with a banner only, 4 with banner + subtitle (a blank row separates the layout from the
+table). Data row n sits at row `header + n`, so formulas written for such a sheet must use those rows.
+
 Everything after the first table of a sheet that looks like `key: value` is a directive (see DIRECTIVES). Formulas are checked by
 core.sheet_engine.formulas before they are written; anything refused raises BuildError with the cell and the reason.
 """
@@ -46,8 +60,10 @@ MAX_COLS = 100
 MAX_ROWS_TOTAL = 50_000
 
 DIRECTIVES = ("format", "total", "freeze", "filter", "highlight", "scale", "databar", "validate", "table", "name", "chart",
-              "widths", "note", "print", "tab", "wrap", "hide", "merge", "color", "align", "border", "kpi", "title")
-MAX_KPIS = 8
+              "widths", "note", "print", "tab", "wrap", "hide", "merge", "color", "align", "border", "kpi", "title",
+              "banner", "subtitle", "input")
+MAX_KPIS = 12
+SECTION_PREFIX = ">> "          # a table row `| >> INCOME STATEMENT | | |` becomes a merged section band
 _DIRECTIVE_RX = re.compile(r"^\s*(" + "|".join(DIRECTIVES) + r")\s*:\s*(.*?)\s*$", re.I)
 _SHEET_RX = re.compile(r"^\s*##\s*sheet\s*:\s*(.+?)\s*$", re.I)
 _BLOCK_RX = re.compile(r"^\s*###\s*block\s*:\s*(.+?)\s*$", re.I)
@@ -342,6 +358,14 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
         dirs = {}
         for k, v in s["directives"]:
             dirs.setdefault(k, []).append(v)
+        banner = (dirs.get("banner") or [""])[-1].strip()
+        subtitle = (dirs.get("subtitle") or [""])[-1].strip()
+        top = (1 if banner else 0) + (1 if subtitle else 0)
+        H = top + 2 if top else 1                 # header row: banner/subtitle rows, one blank row, then the table
+        s["hdr"] = H                              # charts on other sheets read the table position from here
+        # section bands: `| >> TITLE | | |` (first cell only) -> index of the row in `rows`
+        sec = {i for i, r in enumerate(rows) if str(r[0]).startswith(SECTION_PREFIX) and not any(str(x).strip() for x in r[1:])}
+        body_rows = [r for i, r in enumerate(rows) if i not in sec]
         fmt_map = {}
         for v in dirs.get("format", []):
             for part in re.split(r"\s*,\s*(?=[^,=]+=)", v):
@@ -351,20 +375,44 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                     fmt_map.setdefault("__kind__" + k.strip().lower(), f.strip().lower())
         col_fmt = []
         for ci, h in enumerate(header):
-            col_vals = [r[ci] for r in rows]
+            col_vals = [r[ci] for r in body_rows]
             explicit = fmt_map.get(h.lower())
             kind = fmt_map.get("__kind__" + h.lower()) or _infer(col_vals)
             col_fmt.append((kind, explicit or (_named_format(kind) if kind else None)))
 
+        # banner / subtitle rows above the table
+        if top:
+            r_top = 1
+            for text_, is_banner in ((banner, True), (subtitle, False)):
+                if not text_:
+                    continue
+                c = ws.cell(row=r_top, column=1, value=text_)
+                c.data_type = "s"
+                if is_banner:
+                    c.font = Font(bold=True, size=14, color="FFFFFF")
+                    for ci in range(1, ncols + 1):
+                        ws.cell(row=r_top, column=ci).fill = PatternFill("solid", fgColor=accent)
+                    c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True, indent=1)
+                    ws.row_dimensions[r_top].height = 28
+                else:
+                    c.font = Font(italic=True, color="666666")
+                    c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+                    ws.row_dimensions[r_top].height = max(18, 15 * -(-len(text_) // max(60, ncols * 12)))
+                if ncols > 1:
+                    ws.merge_cells(start_row=r_top, start_column=1, end_row=r_top, end_column=ncols)
+                r_top += 1
         # header
         for ci, h in enumerate(header, 1):
-            c = ws.cell(row=1, column=ci, value=h)
+            c = ws.cell(row=H, column=ci, value=h)
             c.data_type = "s"                      # a header is text, even one that starts with "="
             c.font = Font(bold=True, color="FFFFFF")
             c.fill = PatternFill("solid", fgColor=accent)
             c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         # body
-        for ri, row in enumerate(rows, 2):
+        for ri, row in enumerate(rows, H + 1):
+            if ri - H - 1 in sec:                  # a section band: text only, styled after banding below
+                ws.cell(row=ri, column=1, value=str(row[0])[len(SECTION_PREFIX):].strip()).data_type = "s"
+                continue
             for ci, raw in enumerate(row, 1):
                 kind, nf = col_fmt[ci - 1]
                 where = f"sheet '{s['name']}' cell {col_letter(ci)}{ri}"
@@ -385,7 +433,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                     c.alignment = Alignment(wrap_text=True, vertical="top")      # long text wraps instead of running off the sheet
                 else:
                     c.alignment = Alignment(vertical="top")
-        last = len(rows) + 1
+        last = len(rows) + H
         from ..doc_ops.xlsx_ops.financial_styles import is_total_row as _is_tot
         if rows and _is_tot(str(rows[-1][0] if rows[-1] else "")):
             for ci in range(1, ncols + 1):
@@ -407,7 +455,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                 if idx is None or fn.lower() not in codes:
                     _warn(f"sheet '{s['name']}': total {cname}={fn}: needs Column=sum|avg|min|max|count with a column that exists" + _cols_hint(header))
                     continue
-                cell = ws.cell(row=total_row, column=idx, value=f"=SUBTOTAL({codes[fn.lower()]},{col_letter(idx)}2:{col_letter(idx)}{last})")
+                cell = ws.cell(row=total_row, column=idx, value=f"=SUBTOTAL({codes[fn.lower()]},{col_letter(idx)}{H + 1}:{col_letter(idx)}{last})")
                 cell.font = Font(bold=True)
                 if col_fmt[idx - 1][1]:
                     cell.number_format = col_fmt[idx - 1][1]
@@ -418,42 +466,64 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
         # banding (a real Excel table brings its own)
         table_name = (dirs.get("table") or [""])[0].strip()
         if not table_name:
-            for ri in range(3, last + 1, 2):
+            for ri in range(H + 2, last + 1, 2):
                 for ci in range(1, ncols + 1):
                     ws.cell(row=ri, column=ci).fill = PatternFill("solid", fgColor=band)
+        for i in sorted(sec):                      # section bands: merged, bold, accent text on the band colour
+            ri = H + 1 + i
+            for ci in range(1, ncols + 1):
+                ws.cell(row=ri, column=ci).fill = PatternFill("solid", fgColor=band)
+                ws.cell(row=ri, column=ci).border = Border(bottom=thin)
+            c = ws.cell(row=ri, column=1)
+            c.font = Font(bold=True, color=accent)
+            c.alignment = Alignment(horizontal="left", vertical="center")
+            if ncols > 1:
+                ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=ncols)
 
         # widths
         for ci, h in enumerate(header, 1):
-            longest = max([_text_width(h)] + [min(_text_width(r[ci - 1]), 40) if not str(r[ci - 1]).startswith("=") else 12 for r in rows] or [8])
+            longest = max([_text_width(h)] + [min(_text_width(r[ci - 1]), 40) if not str(r[ci - 1]).startswith("=") else 12 for r in body_rows] or [8])
             longest += _format_room(col_fmt[ci - 1][1], longest)
             ws.column_dimensions[col_letter(ci)].width = min(max(longest + 3, 9), 60)
-        for v in dirs.get("widths", []):
-            for k, w in _kv_pairs(v).items():
+        for v in dirs.get("widths", []):           # widths: B=22, Notes=60   (a column letter or a header name)
+            pairs = []
+            for chunk in re.split(r"\s*,\s*", v.strip()):
+                # `A=10 B=20` (space separated, the older form) still works; a name with spaces needs a comma
+                pairs += re.split(r"\s+(?=[A-Za-z0-9_]+=)", chunk) if chunk.count("=") > 1 else [chunk]
+            for part in pairs:
+                if "=" not in part:
+                    continue
+                k, w = (x.strip().strip("\"'") for x in part.rsplit("=", 1))
+                ci = next((i for i, h in enumerate(header, 1) if h.lower() == k.lower()), None)
+                letter = col_letter(ci) if ci else (k.upper() if re.fullmatch(r"[A-Za-z]{1,3}", k) else None)
+                if letter is None:
+                    _warn(f"sheet '{s['name']}': widths: column '{k}' not found" + _cols_hint(header))
+                    continue
                 try:
-                    ws.column_dimensions[k.upper()].width = float(w)
+                    ws.column_dimensions[letter].width = float(w)
                 except ValueError:
                     pass
 
         # freeze, filter, table, print
-        freeze = (dirs.get("freeze") or ["A2"])[-1].strip()
+        freeze = (dirs.get("freeze") or [f"A{H + 1}"])[-1].strip()
         if freeze.lower() not in ("none", "off", "no"):
-            ws.freeze_panes = freeze.upper() if re.fullmatch(r"[A-Za-z]{1,3}\d+", freeze) else "A2"
+            ws.freeze_panes = freeze.upper() if re.fullmatch(r"[A-Za-z]{1,3}\d+", freeze) else f"A{H + 1}"
         flt = (dirs.get("filter") or ["on"])[-1].strip().lower()
         if table_name:
             from openpyxl.worksheet.table import Table, TableStyleInfo
             safe = re.sub(r"[^A-Za-z0-9_]", "_", table_name)
             if not re.match(r"[A-Za-z_]", safe):
                 safe = "t_" + safe
-            tb = Table(displayName=safe, ref=f"A1:{col_letter(ncols)}{last}")
+            tb = Table(displayName=safe, ref=f"A{H}:{col_letter(ncols)}{last}")
             tb.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
             ws.add_table(tb)
         elif flt not in ("off", "no", "none") and rows:
-            ws.auto_filter.ref = f"A1:{col_letter(ncols)}{last}"
+            ws.auto_filter.ref = f"A{H}:{col_letter(ncols)}{last}"
         ws.page_setup.orientation = "landscape" if ncols > 6 else "portrait"
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = 0
         ws.sheet_properties.pageSetUpPr = openpyxl.worksheet.properties.PageSetupProperties(fitToPage=True)
-        ws.print_title_rows = "1:1"
+        ws.print_title_rows = f"{H}:{H}"
         for v in dirs.get("print", []):            # print: landscape | portrait | fit=width | fit=page | no-repeat-header
             for word in re.split(r"[\s,|]+", v.strip().lower()):
                 if word in ("landscape", "portrait"):
@@ -476,7 +546,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                 if ci is None:
                     _warn(f"sheet '{s['name']}': wrap: column '{name.strip()}' not found" + _cols_hint(header))
                     continue
-                for ri in range(2, last + 1):
+                for ri in range(H + 1, last + 1):
                     cell = ws.cell(row=ri, column=ci)
                     cell.alignment = Alignment(wrap_text=True, vertical="top", horizontal=cell.alignment.horizontal)
                 ws.column_dimensions[col_letter(ci)].width = min(max(ws.column_dimensions[col_letter(ci)].width or 30, 30), 60)
@@ -500,7 +570,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
 
         # conditional formatting
         from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, DataBarRule
-        rng = lambda ci: f"{col_letter(ci)}2:{col_letter(ci)}{max(last, 2)}"      # noqa: E731
+        rng = lambda ci: f"{col_letter(ci)}{H + 1}:{col_letter(ci)}{max(last, H + 1)}"      # noqa: E731
         for v in dirs.get("highlight", []):
             m = re.match(r"^(?P<col>.+?)\s*(?P<op>>=|<=|!=|<>|=|>|<|is)\s*(?P<val>.+?)\s+(?P<color>red|green|amber|yellow|blue|grey|gray)$", v.strip(), re.I)
             m_bw = re.match(r"^(?P<col>.+?)\s+between\s+(?P<a>.+?)\s+and\s+(?P<b>.+?)\s+(?P<color>red|green|amber|yellow|blue|grey|gray)$", v.strip(), re.I)
@@ -565,7 +635,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                                     operator="between", formula1=a, formula2=b, allow_blank=True)
             dv.error, dv.errorTitle, dv.showErrorMessage = "Please pick a valid value", "Invalid entry", True
             ws.add_data_validation(dv)
-            dv.add(f"{col_letter(idx)}2:{col_letter(idx)}{max(last + 200, 500)}")      # a few hundred rows of room to add data
+            dv.add(f"{col_letter(idx)}{H + 1}:{col_letter(idx)}{max(last + 200, 500)}")      # a few hundred rows of room to add data
 
         # cell merging (rows and columns)
         for v in dirs.get("merge", []):
@@ -625,7 +695,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
             else:
                 idx = next((i for i, h in enumerate(header, 1) if h.lower() == target.lower()), None)
                 if idx is not None:
-                    for ri in range(2, last + 1):
+                    for ri in range(H + 1, last + 1):
                         target_cells.append(ws.cell(row=ri, column=idx))
 
             if not target_cells:
@@ -670,6 +740,20 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                     cv = cell.alignment.vertical if cell.alignment else "center"
                     cell.alignment = Alignment(horizontal=align_h, vertical=cv)
 
+        # input cells: yellow fill + blue text, the convention for "you may change this" (input: Rate, Base)
+        for v in dirs.get("input", []):
+            for name in [x for x in v.split(",") if x.strip()]:
+                ci = _col_of(name)
+                if ci is None:
+                    _warn(f"sheet '{s['name']}': input: column '{name.strip()}' not found" + _cols_hint(header))
+                    continue
+                for ri in range(H + 1, last + 1):
+                    if ri - H - 1 in sec:
+                        continue
+                    cell = ws.cell(row=ri, column=ci)
+                    cell.fill = PatternFill("solid", fgColor="FFF2CC")
+                    cell.font = Font(color="0000FF", bold=bool(cell.font and cell.font.bold))
+
         # explicit alignment
         for v in dirs.get("align", []):
             for part in re.split(r"\s*,\s*", v.strip()):
@@ -693,7 +777,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                     if idx is None:
                         idx = next((i for i, h in enumerate(header, 1) if h.lower() == col_ref.lower()), None)
                     if idx is not None:
-                        for ri in range(2, last + 1):
+                        for ri in range(H + 1, last + 1):
                             ws.cell(row=ri, column=idx).alignment = Alignment(horizontal=side)
 
         # explicit borders
@@ -1004,7 +1088,8 @@ def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
             continue
         sws = wb[src["xname"]]
         header = [h or f"Column{i + 1}" for i, h in enumerate(src["header"][:MAX_COLS])]
-        nlast = len(src["rows"]) + 1
+        hdr = src.get("hdr", 1)                 # table header row (below any banner), set when the sheet was built
+        nlast = len(src["rows"]) + hdr
         xcol = next((i for i, h in enumerate(header, 1) if h.lower() == opts.get("x", header[0]).lower()), None)
         if xcol is None:
             _warn(f"chart: x column '{opts.get('x')}' not found on sheet '{src['name']}'" + _cols_hint(header))
@@ -1038,17 +1123,17 @@ def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
             continue
         ch.title = opts.get("title") or None
         ch.width, ch.height = float(opts.get("w", 16)), float(opts.get("h", 8.5))
-        cats = Reference(sws, min_col=xcol, min_row=2, max_row=nlast)
+        cats = Reference(sws, min_col=xcol, min_row=hdr + 1, max_row=nlast)
         if kind == "scatter":
             for yi in ycols:
-                se = Series(Reference(sws, min_col=yi, min_row=1, max_row=nlast), Reference(sws, min_col=xcol, min_row=2, max_row=nlast),
+                se = Series(Reference(sws, min_col=yi, min_row=hdr, max_row=nlast), Reference(sws, min_col=xcol, min_row=hdr + 1, max_row=nlast),
                             title_from_data=True)
                 se.marker.symbol = "circle"
                 se.graphicalProperties.line.noFill = True
                 ch.series.append(se)
         else:
             for yi in ycols:
-                ch.add_data(Reference(sws, min_col=yi, min_row=1, max_row=nlast), titles_from_data=True)
+                ch.add_data(Reference(sws, min_col=yi, min_row=hdr, max_row=nlast), titles_from_data=True)
             ch.set_categories(cats)
         if kind != "pie":
             ch.x_axis.title = opts.get("xlabel") or header[xcol - 1]
