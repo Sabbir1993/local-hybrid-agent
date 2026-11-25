@@ -30,6 +30,92 @@ interface SharedData {
   messages: SharedMessage[];
 }
 
+const SharedImageThumb: React.FC<{
+  imgUrl: string;
+  shareKey: string;
+  onPreview: (url: string, title: string) => void;
+}> = ({ imgUrl, shareKey, onPreview }) => {
+  const isDirect = /^(data:|https?:|\/)/.test(imgUrl);
+  const previewSrc = isDirect
+    ? imgUrl
+    : `/media/shared-session/${encodeURIComponent(shareKey)}/raw?path=${encodeURIComponent(imgUrl)}`;
+  const [failed, setFailed] = useState(false);
+
+  // If a data URL fails to load, never render raw base64 as text
+  if (failed && isDirect) return null;
+
+  if (failed || !isDirect) {
+    if (!failed) {
+      return (
+        <img
+          src={previewSrc}
+          className="chat-img-thumb"
+          alt="Attachment"
+          title="Click to enlarge"
+          style={{
+            width: '80px',
+            height: '56px',
+            maxWidth: '80px',
+            maxHeight: '56px',
+            minWidth: '80px',
+            minHeight: '56px',
+            objectFit: 'cover',
+            borderRadius: '6px',
+            cursor: 'zoom-in',
+            flexShrink: 0,
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onPreview(previewSrc, imgUrl);
+          }}
+          onError={() => setFailed(true)}
+        />
+      );
+    }
+    // Failed to load filename as direct image: show filename pill (never if data URL)
+    if (imgUrl.startsWith('data:')) return null;
+    return (
+      <button
+        type="button"
+        className="user-file-pill"
+        title={`Preview ${imgUrl}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onPreview(previewSrc, imgUrl);
+        }}
+      >
+        🖼️ {imgUrl}
+      </button>
+    );
+  }
+
+  return (
+    <img
+      src={previewSrc}
+      className="chat-img-thumb"
+      alt="Attachment"
+      title="Click to enlarge"
+      style={{
+        width: '80px',
+        height: '56px',
+        maxWidth: '80px',
+        maxHeight: '56px',
+        minWidth: '80px',
+        minHeight: '56px',
+        objectFit: 'cover',
+        borderRadius: '6px',
+        cursor: 'zoom-in',
+        flexShrink: 0,
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onPreview(previewSrc, 'Attachment');
+      }}
+      onError={() => setFailed(true)}
+    />
+  );
+};
+
 export const SharedSessionPage: React.FC = () => {
   const [data, setData] = useState<SharedData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -376,6 +462,7 @@ export const SharedSessionPage: React.FC = () => {
                   ];
                   const isImageFileName = (name: string) => /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(name.trim());
                   const nonImageFiles = Array.from(new Set(rawFiles.filter(Boolean))).filter((fname) => {
+                    if (!fname || fname.startsWith('data:')) return false;
                     if (allImages.length > 0 && isImageFileName(fname)) {
                       return false;
                     }
@@ -388,55 +475,14 @@ export const SharedSessionPage: React.FC = () => {
                         <div className="bubble">
                           {allImages.length > 0 && (
                             <div className="user-imgs-gallery" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '6px' }}>
-                              {allImages.map((imgUrl, iIdx) => {
-                                const isDirect = /^(data:|https?:|\/)/.test(imgUrl);
-                                const previewSrc = isDirect ? imgUrl : `/media/shared-session/${encodeURIComponent(shareKey)}/raw?path=${encodeURIComponent(imgUrl)}`;
-                                return (
-                                  <div key={`thumb-wrap-${iIdx}`} style={{ display: 'inline-flex' }}>
-                                    <img
-                                      src={previewSrc}
-                                      className="chat-img-thumb"
-                                      alt="Attachment"
-                                      title="Click to enlarge"
-                                      style={{
-                                        width: '80px',
-                                        height: '56px',
-                                        maxWidth: '80px',
-                                        maxHeight: '56px',
-                                        minWidth: '80px',
-                                        minHeight: '56px',
-                                        objectFit: 'cover',
-                                        borderRadius: '6px',
-                                        cursor: 'zoom-in',
-                                        flexShrink: 0,
-                                      }}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        openPreviewModal(previewSrc, 'Attachment', null, 'modal', true);
-                                      }}
-                                      onError={(e) => {
-                                        // If the image fails to load as an img thumbnail, show fallback file pill
-                                        const el = e.currentTarget;
-                                        el.style.display = 'none';
-                                        const pill = el.nextElementSibling as HTMLElement | null;
-                                        if (pill) pill.style.display = 'inline-flex';
-                                      }}
-                                    />
-                                    <button
-                                      type="button"
-                                      className="user-file-pill"
-                                      style={{ display: 'none' }}
-                                      title={`Preview ${imgUrl}`}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        openPreviewModal(previewSrc, imgUrl, null, 'modal', true);
-                                      }}
-                                    >
-                                      🖼️ {imgUrl}
-                                    </button>
-                                  </div>
-                                );
-                              })}
+                              {allImages.map((imgUrl, iIdx) => (
+                                <SharedImageThumb
+                                  key={`thumb-${iIdx}`}
+                                  imgUrl={imgUrl}
+                                  shareKey={shareKey}
+                                  onPreview={(url, title) => openPreviewModal(url, title, null, 'modal', true)}
+                                />
+                              ))}
                             </div>
                           )}
 
