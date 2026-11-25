@@ -15,6 +15,10 @@ _LIB = r"(?:openpyxl|xlsxwriter|docx|pptx|python_pptx|python_docx)"
 _IMPORT_RX = re.compile(rf"(?m)^\s*(?:import|from)\s+{_LIB}\b")
 _QUOTED_RX = re.compile(rf"""(?:import_module|__import__|find_spec)\(\s*['"]{_LIB}['"]|\[[^\]]*['"]{_LIB}['"]""")
 
+# A script that opens an existing file and never saves/creates one is reading, not building: let it run.
+_READ_RX = re.compile(r"load_workbook\s*\(|read_only\s*=\s*True|\b(?:Document|Presentation)\s*\(\s*[^)\s]")
+_WRITE_RX = re.compile(r"\.save\s*\(|\bWorkbook\s*\(|xlsxwriter|write_only|add_slide\s*\(|add_paragraph\s*\(")
+
 NOTE = ("error: not run. This is an Office document, so use doc_create instead of a script: "
         "doc_create(file='name.xlsx|.docx|.pptx|.csv', content=<markdown; tables as markdown tables or CSV; slides "
         "split by '---'>). It needs no library, no approval card, and doc_edit can change the file later. "
@@ -46,6 +50,8 @@ def note(name: str, args, offered_names, already: set) -> Optional[str]:
         return None
     code = str((args or {}).get("code") or "")
     if _IMPORT_RX.search(code) or _QUOTED_RX.search(code):
+        if _READ_RX.search(code) and not _WRITE_RX.search(code):
+            return None          # only reads an existing file: doc_create cannot do that, so the script runs (not counted as the nudge)
         already.add("doc_redirect")
         return NOTE
     return None

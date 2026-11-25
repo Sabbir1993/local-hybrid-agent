@@ -40,6 +40,24 @@ class Decision(unittest.TestCase):
         self.assertIsNone(dr.note("run_shell", {"code": XLSX}, OFFERED, set()))
         self.assertIsNone(dr.note("run_python", {}, OFFERED, set()))
 
+    def test_scripts_that_only_read_an_existing_file_are_not_redirected(self):
+        for code in ("import openpyxl, json\nwb = openpyxl.load_workbook('data/a.xlsx', read_only=True)\nprint(wb.sheetnames)",
+                     "from openpyxl import load_workbook\nwb = load_workbook(path)\nfor r in wb.active.iter_rows(): print(r)",
+                     "import docx\nd = docx.Document('a.docx')\nprint(len(d.paragraphs))",
+                     "from pptx import Presentation\nprs = Presentation(p)\nprint(len(prs.slides))"):
+            with self.subTest(code=code):
+                seen = set()
+                self.assertIsNone(dr.note("run_python", {"code": code}, OFFERED, seen))
+                self.assertNotIn("doc_redirect", seen, "a read does not use up the once-per-run nudge")
+
+    def test_loading_then_saving_or_creating_is_still_redirected(self):
+        for code in ("import openpyxl\nwb = openpyxl.load_workbook('a.xlsx')\nwb.save('b.xlsx')",
+                     "import openpyxl\nwb = openpyxl.Workbook()",
+                     "import docx\nd = docx.Document()\nd.add_paragraph('x')",
+                     "import xlsxwriter\nwb = xlsxwriter.Workbook('a.xlsx')"):
+            with self.subTest(code=code):
+                self.assertIsNotNone(dr.note("run_python", {"code": code}, OFFERED, set()))
+
     def test_no_redirect_when_doc_create_is_not_offered(self):
         self.assertIsNone(dr.note("run_python", {"code": XLSX}, {"run_python"}, set()), "the tool is not there to point at")
 
