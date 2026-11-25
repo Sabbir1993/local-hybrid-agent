@@ -60,20 +60,24 @@ async function loadSpeechCorpusPanel() {
             <span style="font-weight:600;font-size:13px">Open dates</span>
             <span id="vc-window-state" style="font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px"></span>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">
             <div style="display:flex;flex-direction:column;gap:6px">
               <span class="dim" style="font-size:12px;font-weight:600">Opens</span>
-              <div style="display:flex;gap:6px;align-items:center">
+              <div style="display:flex;gap:8px;align-items:center">
                 <input type="datetime-local" id="vc-from" style="flex:1;min-width:0">
-                <button type="button" class="btn" data-clear="vc-from" title="Clear: open from now" style="width:38px;padding:0 !important">✕</button>
+                <button type="button" class="vc-clear-btn" data-clear="vc-from" title="Clear: open from now" aria-label="Clear open date">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
               </div>
               <span class="dim" style="font-size:11px">Empty = open from now</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:6px">
               <span class="dim" style="font-size:12px;font-weight:600">Closes</span>
-              <div style="display:flex;gap:6px;align-items:center">
+              <div style="display:flex;gap:8px;align-items:center">
                 <input type="datetime-local" id="vc-until" style="flex:1;min-width:0">
-                <button type="button" class="btn" data-clear="vc-until" title="Clear: no end date" style="width:38px;padding:0 !important">✕</button>
+                <button type="button" class="vc-clear-btn" data-clear="vc-until" title="Clear: no end date" aria-label="Clear close date">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
               </div>
               <span class="dim" style="font-size:11px">Empty = no end date</span>
             </div>
@@ -192,7 +196,12 @@ async function loadSpeechCorpusPanel() {
   const dark = (0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]) < 128;
   box.querySelectorAll('input[type="datetime-local"]').forEach((i) => { i.style.colorScheme = dark ? 'dark' : 'light'; });
   box.querySelectorAll('[data-clear]').forEach((b) => b.addEventListener('click', () => {
-    box.querySelector('#' + b.getAttribute('data-clear')).value = '';
+    const input = box.querySelector('#' + b.getAttribute('data-clear'));
+    if (input) {
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
   }));
   showWindow(st);
   box.querySelector('#vc-window-save').addEventListener('click', () =>
