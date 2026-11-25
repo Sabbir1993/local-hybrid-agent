@@ -113,12 +113,14 @@ def remember(user_id: Optional[int], urls) -> None:
     if db_items:
         try:
             from .db.common import _get_projects_db
+            from .sqlite_util import transaction
             db = _get_projects_db()
-            for uid, u, clean_u, exp in db_items:
-                db.execute(
-                    "INSERT OR REPLACE INTO user_allowed_images (user_id, url, clean_url, expires_at) VALUES (?, ?, ?, ?)",
-                    (uid, u, clean_u, exp)
-                )
+            with transaction(db) as c:
+                for uid, u, clean_u, exp in db_items:
+                    c.execute(
+                        "INSERT OR REPLACE INTO user_allowed_images (user_id, url, clean_url, expires_at) VALUES (?, ?, ?, ?)",
+                        (uid, u, clean_u, exp)
+                    )
         except Exception:
             pass
 
@@ -129,8 +131,10 @@ def reset_for_testing() -> None:
     _cache.clear()
     try:
         from .db.common import _get_projects_db
+        from .sqlite_util import transaction
         db = _get_projects_db()
-        db.execute("DELETE FROM user_allowed_images")
+        with transaction(db) as c:
+            c.execute("DELETE FROM user_allowed_images")
     except Exception:
         pass
     try:

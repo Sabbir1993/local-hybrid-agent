@@ -160,8 +160,12 @@ def tool_write_file_common(args: dict) -> str:
     if doc_ops.is_doc(p.name) and p.is_file():
         from .. import doc_store
         from ..doc_ops.base import sha256
-        doc_store.register(get_current_user_id(), p.name, p.suffix.lstrip(".").lower(),
-                           source_spec=spec, sha256=sha256(p.read_bytes()))
+        try:
+            doc_store.register(get_current_user_id(), p.name, p.suffix.lstrip(".").lower(),
+                               source_spec=spec, sha256=sha256(p.read_bytes()))
+        except Exception as e:
+            import sys
+            print(f"[write_file] doc_store.register skipped ({type(e).__name__}: {e})", file=sys.stderr)
     return msg
 
 

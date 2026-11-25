@@ -1972,12 +1972,15 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             turn_limit = min(turn_limit, turn + 1)
                         elif t_name == "write_file":
                             # off the event loop: a deck / PDF written here may look up pictures (web, image model)
-                            res_str = await run_in_executor_ctx(chat_write_file, args)
-                            for _wait in (1.5, 3.0):        # a busy SQLite lock is momentary: write again before telling the model
-                                if "database is locked" not in res_str:
+                            res_str = ""
+                            for _attempt in range(3):
+                                try:
+                                    res_str = await run_in_executor_ctx(chat_write_file, args)
+                                except Exception as e:
+                                    res_str = f"error: {e}"
+                                if "database is locked" not in str(res_str) or _attempt == 2:
                                     break
-                                await asyncio.sleep(_wait)
-                                res_str = await run_in_executor_ctx(chat_write_file, args)
+                                await asyncio.sleep(1.5 * (_attempt + 1))
                             if res_str.startswith("error:") and re.search(r"one write_file call may carry|too big|too long", res_str, re.I) and not size_retried:
                                 size_retried = True
                                 turn_limit = max(turn_limit, turn + 2)      # the model is told to write it shorter: let it

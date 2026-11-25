@@ -37,12 +37,13 @@ def register(uid: int, name: str, kind: str, *, location: str = "common", parent
     if parent_id:
         row = get(uid, parent_id)
         version = (row["version"] + 1) if row else 1
-    cur = _projects_db.execute(
-        "INSERT INTO doc_files (user_id, session_id, name, kind, location, parent_id, version, sha256, "
-        "source_spec, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (uid, session_id, name, kind, location, parent_id, version, sha256, source_spec, time.time()))
-    _projects_db.commit()
-    return cur.lastrowid
+    from .sqlite_util import transaction
+    with transaction(_projects_db) as c:
+        cur = c.execute(
+            "INSERT INTO doc_files (user_id, session_id, name, kind, location, parent_id, version, sha256, "
+            "source_spec, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (uid, session_id, name, kind, location, parent_id, version, sha256, source_spec, time.time()))
+        return cur.lastrowid
 
 
 def get(uid: int, file_id: int) -> Optional[dict]:

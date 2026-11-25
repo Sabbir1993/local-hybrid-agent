@@ -99,8 +99,12 @@ async def _create(args: dict, location: str) -> str:
         loc = _Loc("common", target, uid)
         key = target.name
     await _write(loc, target, data)
-    doc_store.register(uid, key, target.suffix.lower().lstrip("."), location=location, source_spec=spec,
-                       sha256=sha256(data))
+    try:
+        doc_store.register(uid, key, target.suffix.lower().lstrip("."), location=location, source_spec=spec,
+                           sha256=sha256(data))
+    except Exception as e:
+        import sys
+        print(f"[doc_create] doc_store.register skipped ({type(e).__name__}: {e})", file=sys.stderr)
     msg = f"Created {target.name}. Later changes can be made with doc_edit without regenerating it."
     if pic_note:
         msg += " " + pic_note
