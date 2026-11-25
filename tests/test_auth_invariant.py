@@ -42,6 +42,8 @@ PUBLIC_HTTP = {
     ("GET", "/share"),
     ("GET", "/share/{key}"),
     ("GET", "/public/share/{key}"),
+    ("GET", "/media/shared-session/{key}"),
+    ("GET", "/api/share/{key}"),
     ("GET", "/assets/{file_path:path}"),
     # MCP sign-in landing page: forwards the provider's redirect to /mcp/oauth/finish (which needs the session) because
     # the SameSite=Strict cookie is not sent on a navigation that starts on the provider's site; it holds no data

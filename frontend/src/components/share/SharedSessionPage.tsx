@@ -46,13 +46,17 @@ export const SharedSessionPage: React.FC = () => {
     }
 
     let isMounted = true;
-    fetch(`/public/share/${encodeURIComponent(key)}`)
+    fetch(`/media/shared-session/${encodeURIComponent(key)}`)
       .then(async (res) => {
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || 'Shared session not found or link has expired.');
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          throw new Error('Shared session not found or link has expired.');
         }
-        return res.json();
+        const json = await res.json();
+        if (!res.ok) {
+          throw new Error(json.error || 'Shared session not found or link has expired.');
+        }
+        return json;
       })
       .then((json: SharedData) => {
         if (!isMounted) return;

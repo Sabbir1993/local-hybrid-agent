@@ -174,7 +174,7 @@ class TestShareEndpoints(unittest.TestCase):
         pub_app.include_router(pages_router)
         pub_client = TestClient(pub_app)
 
-        res = pub_client.get(f"/public/share/{key}")
+        res = pub_client.get(f"/media/shared-session/{key}")
         self.assertEqual(res.status_code, 200)
         payload = res.json()
         self.assertTrue(payload["ok"])

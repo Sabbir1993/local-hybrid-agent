@@ -58,7 +58,9 @@ async def react_app(key: str = ""):
     return _react_index()
 
 
+@router.get("/media/shared-session/{key}")
 @router.get("/public/share/{key}")
+@router.get("/api/share/{key}")
 async def get_public_share(key: str):
     """Public read-only session data by secure share_key. Unauthenticated by design."""
     from core.db import db_get_shared_session
