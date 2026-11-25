@@ -52,6 +52,8 @@ from .sessions import (
     db_append_message,
     db_fork_session,
     db_create_or_get_share,
+    db_get_share_auth_info,
+    db_verify_share_password,
     db_get_shared_session,
     db_revoke_share,
     _VALID_PLAN_STATUS,

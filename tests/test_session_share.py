@@ -12,8 +12,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.db import (
     db_create_or_get_share,
+    db_get_share_auth_info,
     db_get_shared_session,
     db_revoke_share,
+    db_verify_share_password,
 )
 from core.db import common as db_common
 
@@ -36,7 +38,8 @@ def _setup_test_db():
             session_id INTEGER NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
             share_key TEXT UNIQUE NOT NULL,
             created_at REAL NOT NULL,
-            user_id INTEGER
+            user_id INTEGER,
+            password_hash TEXT
         );
         CREATE INDEX idx_shared_sessions_key ON shared_sessions(share_key);
     """)
@@ -227,3 +230,77 @@ class TestShareEndpoints(unittest.TestCase):
         finally:
             if test_html.exists():
                 test_html.unlink()
+
+    def test_password_protected_share_flow(self):
+        # 1. Owner creates a password-protected share link
+        s_resp = self.client.post("/control/sessions/1/share", json={"password": "my-secret-pass"})
+        self.assertEqual(s_resp.status_code, 200)
+        s_data = s_resp.json()
+        self.assertTrue(s_data["password_protected"])
+        key = s_data["share_key"]
+
+        # Empty/whitespace password is rejected
+        bad_pw_resp = self.client.post("/control/sessions/1/share", json={"password": "   "})
+        self.assertEqual(bad_pw_resp.status_code, 400)
+
+        # DB helper checks
+        info = db_get_share_auth_info(key)
+        self.assertTrue(info["password_required"])
+        self.assertNotEqual(info["password_hash"], "my-secret-pass")
+        self.assertTrue(db_verify_share_password(key, "my-secret-pass"))
+        self.assertFalse(db_verify_share_password(key, "wrong-pass"))
+
+        from fastapi.testclient import TestClient
+        from routes.pages import router as pages_router
+        from fastapi import FastAPI
+        from core.agent_tools.workspace import user_common_root
+
+        pub_app = FastAPI()
+        pub_app.include_router(pages_router)
+        pub_client = TestClient(pub_app)
+
+        # 2. Visitor without password gets 401 password_required and no leaked content
+        r_locked = pub_client.get(f"/media/shared-session/{key}")
+        self.assertEqual(r_locked.status_code, 401)
+        locked_json = r_locked.json()
+        self.assertTrue(locked_json["password_required"])
+        self.assertNotIn("messages", locked_json)
+        self.assertNotIn("title", locked_json)
+
+        r_raw_locked = pub_client.get(f"/media/shared-session/{key}/raw?path=test_diagram-12345678.html")
+        self.assertEqual(r_raw_locked.status_code, 401)
+        r_dl_locked = pub_client.get(f"/media/shared-session/{key}/download?path=test_diagram-12345678.html")
+        self.assertEqual(r_dl_locked.status_code, 401)
+
+        # 3. Wrong password returns 403
+        r_wrong = pub_client.post(f"/media/shared-session/{key}/unlock", json={"password": "wrong"})
+        self.assertEqual(r_wrong.status_code, 403)
+
+        # 4. Correct password unlocks and sets cookie
+        r_ok = pub_client.post(f"/media/shared-session/{key}/unlock", json={"password": "my-secret-pass"})
+        self.assertEqual(r_ok.status_code, 200)
+        self.assertTrue(r_ok.json()["ok"])
+
+        # 5. Now visitor can read the session and raw/download files
+        r_unlocked = pub_client.get(f"/media/shared-session/{key}")
+        self.assertEqual(r_unlocked.status_code, 200)
+        self.assertEqual(r_unlocked.json()["title"], "BFSI Analysis")
+
+        user_root = user_common_root(10)
+        user_root.mkdir(parents=True, exist_ok=True)
+        test_html = user_root / "test_pw_diagram-12345678.html"
+        test_html.write_text("<html><body>Secret Diagram</body></html>", encoding="utf-8")
+        try:
+            r_raw_ok = pub_client.get(f"/media/shared-session/{key}/raw?path=test_pw_diagram-12345678.html")
+            self.assertEqual(r_raw_ok.status_code, 200)
+            self.assertIn("Secret Diagram", r_raw_ok.text)
+        finally:
+            if test_html.exists():
+                test_html.unlink()
+
+        # 6. Changing the share password invalidates the previous visitor cookie
+        s_resp2 = self.client.post("/control/sessions/1/share", json={"password": "new-secret-pass"})
+        self.assertEqual(s_resp2.status_code, 200)
+        self.assertEqual(s_resp2.json()["share_key"], key)
+        r_stale = pub_client.get(f"/media/shared-session/{key}")
+        self.assertEqual(r_stale.status_code, 401)

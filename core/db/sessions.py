@@ -381,20 +381,62 @@ def db_session_groups(owner_user_id: int, kind: str, group_ids: list, per_group:
     return out
 
 
-def db_create_or_get_share(sid: int, owner_user_id: int) -> str:
+def db_create_or_get_share(sid: int, owner_user_id: int, password: Optional[str] = None) -> str:
     """Return an existing share_key or create a new cryptographic share key for a session owned by owner_user_id."""
     if owner_user_id is None or db_session_owner(sid) != owner_user_id:
         raise PermissionError("not your session")
+    pw_hash: Optional[str] = None
+    if password:
+        from core.auth_provider import hash_password
+        pw_hash = hash_password(password)
     row = _projects_db.execute("SELECT share_key FROM shared_sessions WHERE session_id = ?", (sid,)).fetchone()
     if row:
+        if pw_hash is not None:
+            with transaction(_projects_db):
+                _projects_db.execute(
+                    "UPDATE shared_sessions SET password_hash = ? WHERE session_id = ?",
+                    (pw_hash, sid),
+                )
         return row["share_key"]
     share_key = secrets.token_urlsafe(24)
     with transaction(_projects_db):
         _projects_db.execute(
-            "INSERT INTO shared_sessions (session_id, share_key, created_at, user_id) VALUES (?, ?, ?, ?)",
-            (sid, share_key, time.time(), owner_user_id),
+            "INSERT INTO shared_sessions (session_id, share_key, created_at, user_id, password_hash) VALUES (?, ?, ?, ?, ?)",
+            (sid, share_key, time.time(), owner_user_id, pw_hash),
         )
     return share_key
+
+
+def db_get_share_auth_info(share_key: str) -> Optional[dict]:
+    """Return lightweight auth metadata for a share_key without loading messages."""
+    if not share_key or not isinstance(share_key, str):
+        return None
+    row = _projects_db.execute(
+        "SELECT s.id, s.title, sh.password_hash "
+        "FROM shared_sessions sh "
+        "JOIN sessions s ON s.id = sh.session_id "
+        "WHERE sh.share_key = ?",
+        (share_key.strip(),),
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "session_id": row["id"],
+        "title": row["title"],
+        "password_hash": row["password_hash"],
+        "password_required": bool(row["password_hash"]),
+    }
+
+
+def db_verify_share_password(share_key: str, password: str) -> bool:
+    """Verify a visitor-supplied password against the stored share password hash."""
+    info = db_get_share_auth_info(share_key)
+    if not info:
+        return False
+    if not info["password_required"]:
+        return True
+    from core.auth_provider import verify_password
+    return verify_password(password or "", info["password_hash"])
 
 
 def db_get_shared_session(share_key: str) -> Optional[dict]:

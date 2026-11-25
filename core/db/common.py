@@ -43,7 +43,8 @@ def _init_projects_db() -> ThreadLocalDB:
         session_id INTEGER NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
         share_key TEXT UNIQUE NOT NULL,
         created_at REAL NOT NULL,
-        user_id INTEGER
+        user_id INTEGER,
+        password_hash TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_shared_sessions_key ON shared_sessions(share_key);
     CREATE TABLE IF NOT EXISTS plan_items (
@@ -118,6 +119,9 @@ def _init_projects_db() -> ThreadLocalDB:
         conn.execute("ALTER TABLE projects ADD COLUMN device_id TEXT DEFAULT 'default'")
     if "device_name" not in cols:
         conn.execute("ALTER TABLE projects ADD COLUMN device_name TEXT DEFAULT 'Default Device'")
+    sh_cols = [r[1] for r in conn.execute("PRAGMA table_info(shared_sessions)")]
+    if "password_hash" not in sh_cols:
+        conn.execute("ALTER TABLE shared_sessions ADD COLUMN password_hash TEXT")
     session_cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)")]
     if "user_id" not in session_cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")

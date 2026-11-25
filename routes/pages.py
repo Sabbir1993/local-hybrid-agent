@@ -7,12 +7,43 @@ every data endpoint checks authentication itself. Its settings modal shows setti
 (frontend/src/components/modals/SettingsModal.tsx), so that page is still served at /settings.
 """
 
+import hashlib
+import hmac
+import secrets
+
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel
 from core.config import BASE_DIR, STATIC_DIR
 from core.deps import get_current_user
 
 router = APIRouter()
+
+_SHARE_HMAC_SECRET = secrets.token_bytes(32)
+
+
+class ShareUnlockReq(BaseModel):
+    password: str = ""
+
+
+def _share_cookie_name(share_key: str) -> str:
+    digest = hashlib.sha256(share_key.strip().encode("utf-8")).hexdigest()[:16]
+    return f"a770_share_{digest}"
+
+
+def _sign_share_token(share_key: str, password_hash: str) -> str:
+    msg = f"{share_key.strip()}:{password_hash}".encode("utf-8")
+    return hmac.new(_SHARE_HMAC_SECRET, msg, hashlib.sha256).hexdigest()
+
+
+def _is_share_authorized(request: Request, share_key: str, auth_info: dict) -> bool:
+    if not auth_info.get("password_required"):
+        return True
+    token = request.cookies.get(_share_cookie_name(share_key))
+    if not token:
+        return False
+    expected = _sign_share_token(share_key, auth_info.get("password_hash") or "")
+    return hmac.compare_digest(token, expected)
 
 SETTINGS_FILE = BASE_DIR / "settings.html"
 DIST_DIR = BASE_DIR / "frontend" / "dist"
@@ -61,9 +92,14 @@ async def react_app(key: str = ""):
 @router.get("/media/shared-session/{key}")
 @router.get("/public/share/{key}")
 @router.get("/api/share/{key}")
-async def get_public_share(key: str):
-    """Public read-only session data by secure share_key. Unauthenticated by design."""
-    from core.db import db_get_shared_session
+async def get_public_share(key: str, request: Request):
+    """Public read-only session data by secure share_key. Unauthenticated by design (password-gated when configured)."""
+    from core.db import db_get_share_auth_info, db_get_shared_session
+    auth_info = db_get_share_auth_info(key)
+    if not auth_info:
+        return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
+    if not _is_share_authorized(request, key, auth_info):
+        return JSONResponse({"ok": False, "password_required": True, "error": "Password required"}, status_code=401)
     data = db_get_shared_session(key)
     if not data:
         return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
@@ -76,11 +112,40 @@ async def get_public_share(key: str):
     }
 
 
+@router.post("/media/shared-session/{key}/unlock")
+@router.post("/api/share/{key}/unlock")
+async def unlock_public_share(key: str, req: ShareUnlockReq, request: Request):
+    """Verify password for a password-protected share link and issue an HttpOnly share-access cookie."""
+    from core.db import db_get_share_auth_info, db_verify_share_password
+    auth_info = db_get_share_auth_info(key)
+    if not auth_info:
+        return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
+    if auth_info.get("password_required") and not db_verify_share_password(key, req.password):
+        return JSONResponse({"ok": False, "error": "Incorrect password"}, status_code=403)
+    resp = JSONResponse({"ok": True})
+    token = _sign_share_token(key, auth_info.get("password_hash") or "")
+    resp.set_cookie(
+        _share_cookie_name(key),
+        token,
+        httponly=True,
+        samesite="lax",
+        path="/",
+        secure=(request.url.scheme == "https"),
+        max_age=7 * 24 * 3600,
+    )
+    return resp
+
+
 @router.get("/media/shared-session/{key}/raw")
-async def shared_session_raw(key: str, path: str):
+async def shared_session_raw(key: str, path: str, request: Request):
     """Serve a file inline for previews in shared sessions (unauthenticated, secured by share_key)."""
-    from core.db import db_get_shared_session
+    from core.db import db_get_share_auth_info, db_get_shared_session
     from routes.agent.download import _resolve_requested_file, MIME_MAP, VIDEO_MIME
+    auth_info = db_get_share_auth_info(key)
+    if not auth_info:
+        return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
+    if not _is_share_authorized(request, key, auth_info):
+        return JSONResponse({"error": "Password required"}, status_code=401)
     data = db_get_shared_session(key)
     if not data:
         return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
@@ -114,10 +179,15 @@ async def shared_session_raw(key: str, path: str):
 
 
 @router.get("/media/shared-session/{key}/download")
-async def shared_session_download(key: str, path: str):
+async def shared_session_download(key: str, path: str, request: Request):
     """Serve a file as a download attachment in shared sessions (unauthenticated, secured by share_key)."""
-    from core.db import db_get_shared_session
+    from core.db import db_get_share_auth_info, db_get_shared_session
     from routes.agent.download import _resolve_requested_file, MIME_MAP, VIDEO_MIME
+    auth_info = db_get_share_auth_info(key)
+    if not auth_info:
+        return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
+    if not _is_share_authorized(request, key, auth_info):
+        return JSONResponse({"error": "Password required"}, status_code=401)
     data = db_get_shared_session(key)
     if not data:
         return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)

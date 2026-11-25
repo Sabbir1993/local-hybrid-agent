@@ -46,6 +46,9 @@ PUBLIC_HTTP = {
     ("GET", "/media/shared-session/{key}/raw"),
     ("GET", "/media/shared-session/{key}/download"),
     ("GET", "/api/share/{key}"),
+    # password verification for password-protected share links (sets a scoped share cookie, not a login session)
+    ("POST", "/media/shared-session/{key}/unlock"),
+    ("POST", "/api/share/{key}/unlock"),
     ("GET", "/assets/{file_path:path}"),
     # MCP sign-in landing page: forwards the provider's redirect to /mcp/oauth/finish (which needs the session) because
     # the SameSite=Strict cookie is not sent on a navigation that starts on the provider's site; it holds no data

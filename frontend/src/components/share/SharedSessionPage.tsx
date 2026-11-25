@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { Copy, Check, Moon, Sun, AlertCircle } from 'lucide-react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { Copy, Check, Moon, Sun, AlertCircle, Lock, Eye, EyeOff } from 'lucide-react';
 import { renderCompleteChatMessage } from '../../utils/chatRender';
 import { renderMermaidIn } from '../../utils/mermaid';
 import { parseUserMessage } from '../../utils/userMessage';
@@ -120,6 +120,11 @@ export const SharedSessionPage: React.FC = () => {
   const [data, setData] = useState<SharedData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [needsPassword, setNeedsPassword] = useState(false);
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [unlocking, setUnlocking] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedMsgIdx, setCopiedMsgIdx] = useState<number | null>(null);
   const [isDark, setIsDark] = useState(() => {
@@ -160,6 +165,42 @@ export const SharedSessionPage: React.FC = () => {
     };
   }, []);
 
+  const loadSharedSession = useCallback((key: string, signal?: { cancelled: boolean }) => {
+    setLoading(true);
+    setError(null);
+    fetch(`/media/shared-session/${encodeURIComponent(key)}`, { credentials: 'same-origin' })
+      .then(async (res) => {
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          throw new Error('Shared session not found or link has expired.');
+        }
+        const json = await res.json();
+        if (res.status === 401 && json.password_required) {
+          return { __passwordRequired: true } as const;
+        }
+        if (!res.ok) {
+          throw new Error(json.error || 'Shared session not found or link has expired.');
+        }
+        return json as SharedData;
+      })
+      .then((result) => {
+        if (signal?.cancelled) return;
+        if ('__passwordRequired' in result) {
+          setNeedsPassword(true);
+          setLoading(false);
+          return;
+        }
+        setNeedsPassword(false);
+        setData(result);
+        setLoading(false);
+      })
+      .catch((err: Error) => {
+        if (signal?.cancelled) return;
+        setError(err.message || 'Failed to load shared session.');
+        setLoading(false);
+      });
+  }, []);
+
   useEffect(() => {
     const key = getKey();
     if (!key) {
@@ -168,34 +209,50 @@ export const SharedSessionPage: React.FC = () => {
       return;
     }
 
-    let isMounted = true;
-    fetch(`/media/shared-session/${encodeURIComponent(key)}`)
-      .then(async (res) => {
-        const contentType = res.headers.get('content-type') || '';
-        if (!contentType.includes('application/json')) {
-          throw new Error('Shared session not found or link has expired.');
-        }
-        const json = await res.json();
-        if (!res.ok) {
-          throw new Error(json.error || 'Shared session not found or link has expired.');
-        }
-        return json;
-      })
-      .then((json: SharedData) => {
-        if (!isMounted) return;
-        setData(json);
-        setLoading(false);
-      })
-      .catch((err: Error) => {
-        if (!isMounted) return;
-        setError(err.message || 'Failed to load shared session.');
-        setLoading(false);
-      });
+    const signal = { cancelled: false };
+    loadSharedSession(key, signal);
 
     return () => {
-      isMounted = false;
+      signal.cancelled = true;
     };
-  }, []);
+  }, [loadSharedSession]);
+
+  const handleUnlock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const key = getKey();
+    if (!key) return;
+    if (!password) {
+      setUnlockError('Please enter the password.');
+      return;
+    }
+    setUnlocking(true);
+    setUnlockError(null);
+    try {
+      const csrfMatch = document.cookie.match(/(?:^|;\s*)a770_csrf=([^;]+)/);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (csrfMatch) {
+        headers['X-CSRF-Token'] = decodeURIComponent(csrfMatch[1]);
+      }
+      const res = await fetch(`/media/shared-session/${encodeURIComponent(key)}/unlock`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers,
+        body: JSON.stringify({ password }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setUnlockError(json.error || 'Incorrect password. Please try again.');
+        return;
+      }
+      setPassword('');
+      setNeedsPassword(false);
+      loadSharedSession(key);
+    } catch (_) {
+      setUnlockError('Unable to verify password. Please try again.');
+    } finally {
+      setUnlocking(false);
+    }
+  };
 
   // Theme toggle
   const toggleTheme = () => {
@@ -416,7 +473,61 @@ export const SharedSessionPage: React.FC = () => {
             </div>
           )}
 
-          {data && !loading && !error && (
+          {needsPassword && !loading && !error && (
+            <div className="flex-1 flex flex-col items-center justify-center py-20 px-4">
+              <form
+                onSubmit={handleUnlock}
+                className="w-full max-w-sm rounded-2xl border border-[var(--border,rgba(240,246,252,0.12))] bg-[var(--panel,#161b22)] p-6 shadow-xl"
+              >
+                <div className="flex flex-col items-center text-center mb-5">
+                  <div className="w-11 h-11 rounded-full bg-[var(--accent,#79c0ff)]/10 text-[var(--accent,#79c0ff)] flex items-center justify-center mb-3 border border-[var(--accent,#79c0ff)]/25">
+                    <Lock size={20} />
+                  </div>
+                  <h2 className="text-base font-semibold text-[var(--text)] mb-1">Password Protected Link</h2>
+                  <p className="text-xs text-[var(--dim,#8b949e)] leading-relaxed">
+                    Enter the password to view this shared conversation.
+                  </p>
+                </div>
+
+                <div className="relative mb-3">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (unlockError) setUnlockError(null);
+                    }}
+                    placeholder="Enter password"
+                    autoFocus
+                    disabled={unlocking}
+                    className="w-full rounded-lg border border-[var(--border,rgba(240,246,252,0.15))] bg-[var(--panel2,#21262d)] px-3 py-2.5 pr-10 text-sm text-[var(--text)] placeholder:text-[var(--dim,#8b949e)] focus:outline-none focus:border-[var(--accent,#79c0ff)]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--dim,#8b949e)] hover:text-[var(--text)] p-1 cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+
+                {unlockError && (
+                  <p className="text-xs text-rose-400 mb-3">{unlockError}</p>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={unlocking}
+                  className="w-full py-2.5 px-4 rounded-lg bg-[var(--accent,#79c0ff)] text-black text-sm font-semibold hover:opacity-90 transition cursor-pointer disabled:opacity-60"
+                >
+                  {unlocking ? 'Verifying…' : 'Unlock Conversation'}
+                </button>
+              </form>
+            </div>
+          )}
+
+          {data && !loading && !error && !needsPassword && (
             <>
               {/* Messages in exact Chat Mode styling */}
               {data.messages.map((m, idx) => {

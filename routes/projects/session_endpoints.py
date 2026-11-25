@@ -2,8 +2,9 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Body, Depends
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from core.auth import Principal
 from core.db import (
@@ -167,15 +168,23 @@ async def set_session_memory(sid: int, req: SessionMemoryReq, user: Principal = 
     return {"ok": True}
 
 
+class ShareSessionReq(BaseModel):
+    password: Optional[str] = None
+
+
 @router.post("/control/sessions/{sid}/share")
-async def share_session(sid: int, user: Principal = Depends(get_current_user)):
+async def share_session(sid: int, req: Optional[ShareSessionReq] = Body(default=None),
+                        user: Principal = Depends(get_current_user)):
+    password = req.password if req else None
+    if req is not None and req.password is not None and not req.password.strip():
+        return JSONResponse({"error": "Password cannot be empty"}, status_code=400)
     try:
-        share_key = db_create_or_get_share(sid, user.id)
+        share_key = db_create_or_get_share(sid, user.id, password=password)
     except PermissionError:
         return JSONResponse({"error": "session not found"}, status_code=404)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
-    return {"ok": True, "share_key": share_key, "share_url": f"/share/{share_key}"}
+    return {"ok": True, "share_key": share_key, "share_url": f"/share/{share_key}", "password_protected": bool(password)}
 
 
 @router.delete("/control/sessions/{sid}/share")

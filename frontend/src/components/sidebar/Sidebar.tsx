@@ -6,7 +6,7 @@ import { SessionTree, type TreeGroup } from './SessionTree';
 import { api, apiFetch, getClientDeviceId } from '../../services/api';
 import { useMediaQuery, NARROW_QUERY } from '../../hooks/useMediaQuery';
 import { env } from '../../config/env';
-import { Pin, PinOff, Pencil, Share2, Download, Trash2, AlertTriangle } from 'lucide-react';
+import { Pin, PinOff, Pencil, Share2, Download, Trash2, AlertTriangle, Lock, Eye, EyeOff } from 'lucide-react';
 
 export const Sidebar: React.FC = () => {
   const {
@@ -59,6 +59,11 @@ export const Sidebar: React.FC = () => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [menuState, setMenuState] = useState<{ x: number; y: number; sid: string | number; title: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ sid: string | number; title: string } | null>(null);
+  const [shareModal, setShareModal] = useState<{ sid: string | number; title: string } | null>(null);
+  const [sharePassword, setSharePassword] = useState('');
+  const [showSharePw, setShowSharePw] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
   const [searchResults, setSearchResults] = useState<SessionItem[] | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const userMenuPillRef = useRef<HTMLDivElement>(null);
@@ -205,23 +210,47 @@ export const Sidebar: React.FC = () => {
     }
   };
 
-  const handleShare = async (sid: string | number) => {
+  const handleShare = (sid: string | number, title: string) => {
     setMenuState(null);
+    setSharePassword('');
+    setShowSharePw(false);
+    setShareError(null);
+    setShareModal({ sid, title });
+  };
+
+  const handleConfirmShare = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!shareModal) return;
+    if (!sharePassword.trim()) {
+      setShareError('Please enter a password to protect this link.');
+      return;
+    }
+    setIsSharing(true);
+    setShareError(null);
     try {
-      const resp = await apiFetch(`/control/sessions/${sid}/share`, { method: 'POST' });
+      const resp = await apiFetch(`/control/sessions/${shareModal.sid}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: sharePassword }),
+      });
       if (!resp.ok) {
-        showToast('Failed to create share link', 'error');
+        const errData = await resp.json().catch(() => ({}));
+        setShareError(errData.error || 'Failed to create share link');
         return;
       }
       const data = await resp.json();
       const shareUrl = data.share_url || `/share/${data.share_key}`;
       const url = `${window.location.origin}${shareUrl}`;
+      setShareModal(null);
+      setSharePassword('');
       navigator.clipboard.writeText(url).then(
-        () => showToast('Public share link copied to clipboard!', 'success'),
+        () => showToast('Password-protected share link copied to clipboard!', 'success'),
         () => showToast(`Share URL: ${url}`, 'info'),
       );
     } catch (_) {
-      showToast('Failed to create share link', 'error');
+      setShareError('Failed to create share link');
+    } finally {
+      setIsSharing(false);
     }
   };
 
@@ -816,7 +845,7 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
               <button
                 type="button"
                 className="s-menu-item-row"
-                onClick={() => handleShare(menuState.sid)}
+                onClick={() => handleShare(menuState.sid, menuState.title)}
               >
                 <Share2 size={14} className="s-icon" />
                 <span className="s-label">Share</span>
@@ -845,6 +874,98 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
             </div>
           );
         })()}
+
+        {/* Share Password Modal */}
+        {shareModal && (
+          <div className="ca-modal-overlay" style={{ display: 'flex' }} onClick={() => !isSharing && setShareModal(null)}>
+            <div className="ca-modal-box" style={{ maxWidth: 400, padding: '20px 22px' }} onClick={(e) => e.stopPropagation()}>
+              <form onSubmit={handleConfirmShare}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--accent)', marginBottom: 10 }}>
+                  <Lock size={19} />
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: 'var(--text)' }}>Protect Shared Link</h3>
+                </div>
+                <p style={{ fontSize: 13, color: 'var(--dim)', margin: '0 0 14px 0', lineHeight: 1.5 }}>
+                  Set a password for <strong style={{ color: 'var(--text)' }}>"{shareModal.title}"</strong>. Visitors will be asked for this password before viewing the conversation.
+                </p>
+                <div style={{ position: 'relative', marginBottom: 10 }}>
+                  <input
+                    type={showSharePw ? 'text' : 'password'}
+                    value={sharePassword}
+                    onChange={(e) => {
+                      setSharePassword(e.target.value);
+                      if (shareError) setShareError(null);
+                    }}
+                    placeholder="Enter share password"
+                    autoFocus
+                    disabled={isSharing}
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      padding: '9px 36px 9px 12px',
+                      borderRadius: 8,
+                      border: '1px solid var(--border, rgba(255,255,255,0.14))',
+                      background: 'var(--panel2, #161b22)',
+                      color: 'var(--text)',
+                      fontSize: 13,
+                      outline: 'none',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSharePw((v) => !v)}
+                    aria-label={showSharePw ? 'Hide password' : 'Show password'}
+                    style={{
+                      position: 'absolute',
+                      right: 8,
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--dim)',
+                      cursor: 'pointer',
+                      padding: 4,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                    }}
+                  >
+                    {showSharePw ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+                {shareError && (
+                  <p style={{ fontSize: 12, color: '#f87171', margin: '0 0 12px 0' }}>{shareError}</p>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    disabled={isSharing}
+                    onClick={() => setShareModal(null)}
+                    style={{ padding: '6px 14px', fontSize: 13 }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn"
+                    disabled={isSharing}
+                    style={{
+                      background: 'var(--accent, #58a6ff)',
+                      color: '#000',
+                      border: 'none',
+                      padding: '6px 16px',
+                      borderRadius: 6,
+                      fontWeight: 600,
+                      cursor: isSharing ? 'wait' : 'pointer',
+                      fontSize: 13,
+                    }}
+                  >
+                    {isSharing ? 'Creating…' : 'Create & Copy Link'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
         {/* Delete Confirmation Modal */}
         {confirmDelete && (
