@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Copy, Check, Moon, Sun, Bot, User, AlertCircle } from 'lucide-react';
+import { Copy, Check, Moon, Sun, AlertCircle } from 'lucide-react';
 import { renderCompleteChatMessage } from '../../utils/chatRender';
 import { renderMermaidIn } from '../../utils/mermaid';
 
@@ -27,7 +27,8 @@ export const SharedSessionPage: React.FC = () => {
     return document.documentElement.getAttribute('data-theme') !== 'light';
   });
 
-  const containerRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
 
   // Extract share key from /share/:key or /share?k=:key
   const getKey = (): string => {
@@ -36,6 +37,19 @@ export const SharedSessionPage: React.FC = () => {
     const sp = new URLSearchParams(window.location.search);
     return sp.get('k') || '';
   };
+
+  useEffect(() => {
+    // Ensure body doesn't double-scroll while #chat scrolls smoothly
+    document.documentElement.style.height = '100%';
+    document.body.style.height = '100%';
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.documentElement.style.height = '';
+      document.body.style.height = '';
+      document.body.style.overflow = '';
+    };
+  }, []);
 
   useEffect(() => {
     const key = getKey();
@@ -88,13 +102,13 @@ export const SharedSessionPage: React.FC = () => {
 
   // Render Mermaid diagrams when content loads
   useEffect(() => {
-    if (data && containerRef.current) {
-      renderMermaidIn(containerRef.current);
+    if (data && innerRef.current) {
+      renderMermaidIn(innerRef.current);
     }
   }, [data]);
 
   // Code block copy click delegation
-  const handleContainerClick = (e: React.MouseEvent) => {
+  const handleChatClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
     const copyBtn = target.closest<HTMLButtonElement>('button[data-click="code-copy"]');
     if (copyBtn) {
@@ -137,30 +151,28 @@ export const SharedSessionPage: React.FC = () => {
 
   return (
     <div
-      className="min-h-screen flex flex-col bg-[var(--bg,#111317)] text-[var(--text,#e2e8f0)]"
+      className="h-screen h-[100dvh] flex flex-col bg-[var(--bg,#0d1117)] text-[var(--text,#f0f6fc)] overflow-hidden"
       style={{ fontFamily: 'var(--sp-body, system-ui, -apple-system, sans-serif)' }}
     >
-      {/* Minimal Public Navigation Header */}
-      <header className="sticky top-0 z-30 border-b border-[var(--border,#262b35)] bg-[var(--bg,#111317)]/90 backdrop-blur px-4 py-3 sm:px-6">
-        <div className="max-w-4xl mx-auto flex items-center justify-between gap-4">
+      {/* Minimal Header */}
+      <header className="shrink-0 border-b border-[var(--border,rgba(240,246,252,0.1))] bg-[var(--bg,#0d1117)] px-4 py-3 sm:px-6 z-20">
+        <div className="max-w-[850px] mx-auto flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <img
               src="/static/logo/logo.jpg"
               alt="SSL AI"
-              className="w-8 h-8 rounded-lg object-cover border border-[var(--border,#323946)] shadow-sm shrink-0"
+              className="w-7 h-7 rounded-lg object-cover border border-[var(--border,rgba(240,246,252,0.15))] shadow-sm shrink-0"
               onError={(e) => {
                 (e.target as HTMLElement).style.display = 'none';
               }}
             />
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-sm truncate">
-                  {data?.title || 'Shared Session'}
-                </span>
-                <span className="text-[10.5px] font-medium tracking-wide uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 shrink-0">
-                  Read Only
-                </span>
-              </div>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="font-semibold text-sm truncate text-[var(--text)]">
+                {data?.title || 'Shared Session'}
+              </span>
+              <span className="text-[10px] font-semibold tracking-wide uppercase px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shrink-0">
+                Read Only
+              </span>
             </div>
           </div>
 
@@ -168,8 +180,8 @@ export const SharedSessionPage: React.FC = () => {
             <button
               type="button"
               onClick={handleCopyLink}
-              title="Copy share link"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--border,#323946)] bg-[var(--sp-raised,rgba(255,255,255,0.04))] hover:bg-[var(--border,#323946)] text-[var(--text,#e2e8f0)] transition"
+              title="Copy public link"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--border,rgba(240,246,252,0.15))] bg-[var(--panel2,#21262d)] hover:bg-[var(--border,rgba(240,246,252,0.2))] text-[var(--text)] transition cursor-pointer"
             >
               {copiedLink ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
               <span>{copiedLink ? 'Copied' : 'Share link'}</span>
@@ -179,7 +191,7 @@ export const SharedSessionPage: React.FC = () => {
               onClick={toggleTheme}
               title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
               aria-label="Toggle theme"
-              className="w-8 h-8 inline-flex items-center justify-center rounded-lg border border-[var(--border,#323946)] bg-[var(--sp-raised,rgba(255,255,255,0.04))] hover:bg-[var(--border,#323946)] text-[var(--dim,#94a3b8)] hover:text-[var(--text,#e2e8f0)] transition"
+              className="w-8 h-8 inline-flex items-center justify-center rounded-lg border border-[var(--border,rgba(240,246,252,0.15))] bg-[var(--panel2,#21262d)] hover:bg-[var(--border,rgba(240,246,252,0.2))] text-[var(--dim,#8b949e)] hover:text-[var(--text)] transition cursor-pointer"
             >
               {isDark ? <Sun size={15} /> : <Moon size={15} />}
             </button>
@@ -187,137 +199,121 @@ export const SharedSessionPage: React.FC = () => {
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <main
-        ref={containerRef}
-        onClick={handleContainerClick}
-        className="flex-1 max-w-4xl w-full mx-auto px-4 py-8 sm:px-6 flex flex-col gap-6"
+      {/* Chat Mode Scroll Area (using native #chat and #chat-inner for exact chat mode layout) */}
+      <div
+        id="chat"
+        ref={chatScrollRef}
+        onClick={handleChatClick}
+        className="flex-1 overflow-y-auto overflow-x-hidden w-full"
+        style={{ WebkitOverflowScrolling: 'touch' }}
       >
-        {loading && (
-          <div className="flex-1 flex flex-col items-center justify-center py-20 gap-3 text-[var(--dim,#94a3b8)]">
-            <div className="w-8 h-8 rounded-full border-2 border-[var(--accent,#f97316)] border-t-transparent animate-spin" />
-            <p className="text-sm">Loading shared session…</p>
-          </div>
-        )}
-
-        {error && (
-          <div className="flex-1 flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
-            <div className="w-12 h-12 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mb-3 border border-rose-500/20">
-              <AlertCircle size={24} />
+        <div id="chat-inner" ref={innerRef} style={{ minHeight: '100%', paddingBottom: '40px' }}>
+          {loading && (
+            <div className="flex-1 flex flex-col items-center justify-center py-24 gap-3 text-[var(--dim,#8b949e)]">
+              <div className="w-8 h-8 rounded-full border-2 border-[var(--accent,#79c0ff)] border-t-transparent animate-spin" />
+              <p className="text-sm">Loading conversation…</p>
             </div>
-            <h2 className="text-base font-semibold text-[var(--text,#e2e8f0)] mb-1">Session Unavailable</h2>
-            <p className="text-xs text-[var(--dim,#94a3b8)] leading-relaxed mb-6">{error}</p>
-            <a
-              href="/"
-              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg bg-[var(--accent,#f97316)] text-white hover:opacity-90 transition"
-            >
-              Go to SSL AI
-            </a>
-          </div>
-        )}
+          )}
 
-        {data && !loading && !error && (
-          <>
-            {/* Session Metadata Banner */}
-            <div className="border-b border-[var(--border,#262b35)] pb-4 mb-2 flex items-center justify-between text-xs text-[var(--dim,#94a3b8)] flex-wrap gap-2">
-              <div>
-                <span className="font-medium text-[var(--text,#e2e8f0)]">{data.title}</span>
-                {data.created_at ? <span> · Created {formatDate(data.created_at)}</span> : null}
+          {error && (
+            <div className="flex-1 flex flex-col items-center justify-center py-20 text-center max-w-md mx-auto">
+              <div className="w-12 h-12 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mb-3 border border-rose-500/20">
+                <AlertCircle size={24} />
               </div>
-              <div>{data.messages.length} messages</div>
+              <h2 className="text-base font-semibold text-[var(--text)] mb-1">Session Unavailable</h2>
+              <p className="text-xs text-[var(--dim,#8b949e)] leading-relaxed mb-6">{error}</p>
+              <a
+                href="/"
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg bg-[var(--accent,#79c0ff)] text-black font-semibold hover:opacity-90 transition"
+              >
+                Go to SSL AI
+              </a>
             </div>
+          )}
 
-            {/* Conversation Messages */}
-            <div className="flex flex-col gap-6">
+          {data && !loading && !error && (
+            <>
+              {/* Messages in exact Chat Mode styling */}
               {data.messages.map((m, idx) => {
                 const isUser = m.role === 'user';
-                return (
-                  <article
-                    key={idx}
-                    className={`flex flex-col gap-2 ${
-                      isUser
-                        ? 'items-end'
-                        : 'items-start w-full'
-                    }`}
-                  >
-                    {/* Header info / avatar */}
-                    <div className="flex items-center gap-2 text-[11px] text-[var(--dim,#94a3b8)] px-1">
-                      {isUser ? (
-                        <>
-                          <span className="font-semibold text-[var(--text,#e2e8f0)]">You</span>
-                          <User size={13} className="text-[var(--accent,#f97316)]" />
-                        </>
-                      ) : (
-                        <>
-                          <Bot size={13} className="text-[var(--accent,#f97316)]" />
-                          <span className="font-semibold text-[var(--text,#e2e8f0)]">SSL AI</span>
-                          {m.created_at ? <span>· {formatDate(m.created_at)}</span> : null}
-                        </>
-                      )}
-                    </div>
-
-                    {/* Message Bubble/Card */}
-                    <div
-                      className={`relative rounded-2xl p-4 sm:p-5 text-[13.5px] leading-relaxed transition-colors ${
-                        isUser
-                          ? 'bg-[var(--sp-raised,rgba(255,255,255,0.06))] border border-[var(--border,#323946)] text-[var(--text,#e2e8f0)] max-w-[85%] rounded-tr-sm shadow-sm'
-                          : 'bg-transparent border border-[var(--border,#262b35)] text-[var(--text,#e2e8f0)] w-full rounded-tl-sm shadow-sm'
-                      }`}
-                    >
-                      {/* Thought process (if any, kept unobtrusive) */}
-                      {m.thinking && (
-                        <details className="mb-3 border border-[var(--border,#262b35)] rounded-lg p-2.5 bg-[var(--sp-raised,rgba(255,255,255,0.02))] text-xs text-[var(--dim,#94a3b8)]">
-                          <summary className="cursor-pointer font-medium select-none hover:text-[var(--text,#e2e8f0)]">
-                            Thought process
-                          </summary>
-                          <div className="mt-2 whitespace-pre-wrap font-mono text-[11.5px] opacity-90 border-t border-[var(--border,#262b35)] pt-2">
-                            {m.thinking}
+                if (isUser) {
+                  return (
+                    <div key={idx} className="msg user">
+                      <div className="user-msg-col">
+                        <div className="bubble">
+                          <div
+                            className="user-text select-text"
+                            dangerouslySetInnerHTML={{
+                              __html: renderCompleteChatMessage(m.content, undefined, undefined, true),
+                            }}
+                          />
+                        </div>
+                        {m.created_at ? (
+                          <div className="user-bubble-bottom-bar" style={{ display: 'flex', justifyContent: 'flex-end', padding: '2px 4px 0' }}>
+                            <span className="user-msg-time" style={{ fontSize: '11px', color: 'var(--dim)' }}>
+                              {formatDate(m.created_at)}
+                            </span>
                           </div>
-                        </details>
-                      )}
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                }
 
-                      {/* Main prose/markdown (ZERO tool calling badges or internal tool JSON) */}
+                // Assistant message: exact Claude/Chat Mode unboxed layout
+                return (
+                  <div key={idx} className="msg bot">
+                    <div className="bubble">
                       <div
-                        className="bot-content overflow-hidden select-text"
+                        className="bot-content select-text"
                         dangerouslySetInnerHTML={{
                           __html: renderCompleteChatMessage(m.content, undefined, undefined, true),
                         }}
                       />
-
-                      {/* Bottom action for assistant messages: copy response */}
-                      {!isUser && (
-                        <div className="mt-3 pt-3 border-t border-[var(--border,#262b35)] flex items-center justify-end">
-                          <button
-                            type="button"
-                            onClick={() => handleCopyMessage(m.content, idx)}
-                            title="Copy response text"
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-md border border-transparent hover:border-[var(--border,#323946)] hover:bg-[var(--sp-raised,rgba(255,255,255,0.04))] text-[var(--dim,#94a3b8)] hover:text-[var(--text,#e2e8f0)] transition"
-                          >
-                            {copiedMsgIdx === idx ? (
-                              <>
-                                <Check size={12} className="text-emerald-400" />
-                                <span>Copied</span>
-                              </>
-                            ) : (
-                              <>
-                                <Copy size={12} />
-                                <span>Copy text</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      )}
+                      <div
+                        className="bot-actions"
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          marginTop: '12px',
+                          paddingTop: '8px',
+                          borderTop: '1px solid var(--border-subtle, rgba(255,255,255,0.06))',
+                        }}
+                      >
+                        <span style={{ fontSize: '11px', color: 'var(--dim)' }}>
+                          {m.created_at ? formatDate(m.created_at) : ''}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyMessage(m.content, idx)}
+                          title="Copy response"
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-md border border-transparent hover:border-[var(--border)] hover:bg-[var(--panel2)] text-[var(--dim)] hover:text-[var(--text)] transition cursor-pointer"
+                        >
+                          {copiedMsgIdx === idx ? (
+                            <>
+                              <Check size={12} className="text-emerald-400" />
+                              <span>Copied</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy size={12} />
+                              <span>Copy text</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
-                  </article>
+                  </div>
                 );
               })}
-            </div>
-          </>
-        )}
-      </main>
+            </>
+          )}
+        </div>
+      </div>
 
-      {/* Footer */}
-      <footer className="border-t border-[var(--border,#262b35)] py-4 text-center text-xs text-[var(--dim,#94a3b8)]">
+      {/* Subtle Footer */}
+      <footer className="shrink-0 border-t border-[var(--border,rgba(240,246,252,0.08))] py-2.5 text-center text-xs text-[var(--dim,#8b949e)] bg-[var(--bg,#0d1117)]">
         <span>SSL AI · Public Shared Chat View</span>
       </footer>
     </div>
