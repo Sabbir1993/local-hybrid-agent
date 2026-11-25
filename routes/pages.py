@@ -67,7 +67,13 @@ async def get_public_share(key: str):
     data = db_get_shared_session(key)
     if not data:
         return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
-    return {"ok": True, **data}
+    return {
+        "ok": True,
+        "title": data["title"],
+        "created_at": data["created_at"],
+        "shared_at": data["shared_at"],
+        "messages": data["messages"],
+    }
 
 
 @router.get("/media/shared-session/{key}/raw")
@@ -79,7 +85,7 @@ async def shared_session_raw(key: str, path: str):
     if not data:
         return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
 
-    p = _resolve_requested_file(path)
+    p = _resolve_requested_file(path, recover=False, user_id=data.get("user_id"))
     if p is None or not p.is_file():
         return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
 
@@ -116,7 +122,7 @@ async def shared_session_download(key: str, path: str):
     if not data:
         return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
 
-    p = _resolve_requested_file(path)
+    p = _resolve_requested_file(path, recover=False, user_id=data.get("user_id"))
     if p is None or not p.is_file():
         return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
 

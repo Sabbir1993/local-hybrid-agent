@@ -184,3 +184,46 @@ class TestShareEndpoints(unittest.TestCase):
         self.assertEqual(payload["messages"][0]["role"], "user")
         self.assertEqual(payload["messages"][1]["role"], "assistant")
         self.assertNotIn("tool_calls", payload["messages"][1])
+
+    def test_shared_session_raw_and_download(self):
+        s_resp = self.client.post("/control/sessions/1/share")
+        key = s_resp.json()["share_key"]
+
+        from fastapi.testclient import TestClient
+        from routes.pages import router as pages_router
+        from fastapi import FastAPI
+        from core.agent_tools.workspace import user_common_root
+
+        pub_app = FastAPI()
+        pub_app.include_router(pages_router)
+        pub_client = TestClient(pub_app)
+
+        # Write a dummy test file in user 10's common space (session 1 owner is user 10)
+        user_root = user_common_root(10)
+        user_root.mkdir(parents=True, exist_ok=True)
+        test_html = user_root / "test_diagram-12345678.html"
+        test_html.write_text("<html><body>Diagram Content</body></html>", encoding="utf-8")
+
+        try:
+            # 1. Fetch raw preview without auth
+            r_raw = pub_client.get(f"/media/shared-session/{key}/raw?path=test_diagram-12345678.html")
+            self.assertEqual(r_raw.status_code, 200)
+            self.assertIn("Diagram Content", r_raw.text)
+            self.assertEqual(r_raw.headers.get("content-type"), "text/html; charset=utf-8")
+
+            # 2. Fetch download attachment without auth
+            r_dl = pub_client.get(f"/media/shared-session/{key}/download?path=test_diagram-12345678.html")
+            self.assertEqual(r_dl.status_code, 200)
+            self.assertIn("Diagram Content", r_dl.text)
+            self.assertIn("attachment", r_dl.headers.get("content-disposition", ""))
+
+            # 3. Invalid share key returns 404
+            r_bad = pub_client.get("/media/shared-session/invalidkey/raw?path=test_diagram-12345678.html")
+            self.assertEqual(r_bad.status_code, 404)
+
+            # 4. Non-existent file returns 404
+            r_nofile = pub_client.get(f"/media/shared-session/{key}/raw?path=non_existent-abcdef12.html")
+            self.assertEqual(r_nofile.status_code, 404)
+        finally:
+            if test_html.exists():
+                test_html.unlink()

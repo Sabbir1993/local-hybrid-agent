@@ -402,7 +402,7 @@ def db_get_shared_session(share_key: str) -> Optional[dict]:
     if not share_key or not isinstance(share_key, str):
         return None
     row = _projects_db.execute(
-        "SELECT s.id, s.title, s.created_at, sh.created_at as shared_at "
+        "SELECT s.id, s.title, s.created_at, s.user_id, sh.created_at as shared_at "
         "FROM shared_sessions sh "
         "JOIN sessions s ON s.id = sh.session_id "
         "WHERE sh.share_key = ?",
@@ -432,6 +432,8 @@ def db_get_shared_session(share_key: str) -> Optional[dict]:
             "thinking": meta.get("reasoning", "") if isinstance(meta, dict) else "",
         })
     return {
+        "id": row["id"],
+        "user_id": row["user_id"],
         "title": row["title"],
         "created_at": row["created_at"],
         "shared_at": row["shared_at"],

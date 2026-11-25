@@ -14,8 +14,17 @@ export const PreviewModal: React.FC = () => {
   const [iframeKey, setIframeKey] = useState(1);
   const [imgSrc, setImgSrc] = useState('');
 
-  const cleanPath = (filePath || '').split('?')[0];
-  const fname = (cleanPath || title || 'file').split('\\').pop()?.split('/').pop() || 'file';
+  let targetPath = filePath || '';
+  if (targetPath.includes('?')) {
+    try {
+      const q = new URLSearchParams(targetPath.split('?')[1]);
+      const p = q.get('path');
+      if (p) targetPath = p;
+    } catch (_) {}
+  }
+  const cleanPath = targetPath.split('?')[0];
+  const fnameFromPath = cleanPath.split('\\').pop()?.split('/').pop() || '';
+  const fname = (fnameFromPath && fnameFromPath.includes('.')) ? fnameFromPath : (title || fnameFromPath || 'file');
   const ext = fname.includes('.') ? fname.split('.').pop()?.toLowerCase() || '' : '';
 
   const enc = encodeURIComponent(filePath || '');
@@ -26,11 +35,16 @@ export const PreviewModal: React.FC = () => {
     : isWs
       ? `/agent/ws/raw?path=${enc}${agentWsParam()}`
       : `/agent/raw?path=${enc}`;
-  const dlUrl = filePath.startsWith('http') || filePath.startsWith('data:') || filePath.startsWith('blob:')
-    ? filePath
-    : filePath.startsWith('/media/shared-session/')
-      ? filePath.replace('/raw?', '/download?')
-      : `/agent/download?path=${enc}`;
+  let dlUrl = filePath;
+  if (filePath.startsWith('data:') || filePath.startsWith('blob:')) {
+    dlUrl = filePath;
+  } else if (filePath.includes('/media/shared-session/')) {
+    dlUrl = filePath.replace('/raw?', '/download?');
+  } else if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+    dlUrl = filePath;
+  } else {
+    dlUrl = `/agent/download?path=${enc}`;
+  }
 
   const isImage = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'ico', 'bmp'].includes(ext) ||
     filePath.startsWith('data:image/') ||

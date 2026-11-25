@@ -17,13 +17,14 @@ def _recovery_on() -> bool:
         return False
 
 
-def _resolve_requested_file(path: str, space: Optional[str] = None, recover: bool = True, strict: bool = False) -> Optional[Path]:
+def _resolve_requested_file(path: str, space: Optional[str] = None, recover: bool = True, strict: bool = False, user_id: Optional[int] = None) -> Optional[Path]:
     """The saved file a Preview / Download request names. recover=False only looks (no history recovery, which writes).
     strict=True (the chat's "does this link open a file" check): only the exact name, or - for a name without a version - the newest
     `<stem>-<8 hex><suffix>` of that same stem. No prefix / wildcard / other-extension guessing, so `index.html` never finds another
     chat's `index-aaaaaaaa.html` by luck and `*.pdf` never serves the newest pdf."""
     import glob as _glob
     import re as _re
+    from core.agent_tools.workspace import user_common_root
     p = None
     clean_name = Path(path).name
     raw_stem = Path(clean_name).stem
@@ -35,7 +36,7 @@ def _resolve_requested_file(path: str, space: Optional[str] = None, recover: boo
     #    (generated/ holds images and videos from core/media.py: always an exact path)
     if space == "common" or str(path).replace("\\", "/").lstrip("/").startswith("generated/"):
         try:
-            cand = _common_resolve(path)
+            cand = _common_resolve(path, user_id=user_id)
             if cand.is_file():
                 p = cand
         except Exception:
@@ -46,7 +47,7 @@ def _resolve_requested_file(path: str, space: Optional[str] = None, recover: boo
     # the server's own file at that path.
     if p is None and has_uuid:
         try:
-            cand = _common_resolve(path)
+            cand = _common_resolve(path, user_id=user_id)
             if cand.is_file():
                 p = cand
         except Exception:
@@ -59,7 +60,8 @@ def _resolve_requested_file(path: str, space: Optional[str] = None, recover: boo
         try:
             cand_matches = []
             g_stem, g_suf = _glob.escape(clean_stem), _glob.escape(suffix)
-            for ws_dir in (common_workspace(),):
+            ws_dir = user_common_root(user_id) if user_id is not None else common_workspace()
+            for ws_dir in (ws_dir,):
                 if ws_dir and ws_dir.is_dir():
                     if strict:
                         exact_cand = ws_dir / clean_name
@@ -93,7 +95,7 @@ def _resolve_requested_file(path: str, space: Optional[str] = None, recover: boo
     # requesting user's own recent session messages (never other users')
     # Off by default (chat.download_recovery): it writes a NEW file from text found in the user's chat history, so the file the
     # user gets is not the one that was generated. A missing file is a 404 unless the admin opts in.
-    uid = get_current_user_id()
+    uid = user_id if user_id is not None else get_current_user_id()
     if recover and not strict and (p is None or not p.is_file()) and uid is not None and _recovery_on():
         try:
             from core.db import _projects_db
