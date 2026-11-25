@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Copy, Check, Moon, Sun, AlertCircle } from 'lucide-react';
 import { renderCompleteChatMessage } from '../../utils/chatRender';
 import { renderMermaidIn } from '../../utils/mermaid';
+import { parseUserMessage } from '../../utils/userMessage';
 import { useAppStore } from '../../stores/useAppStore';
 import { DiagramModal } from '../modals/DiagramModal';
 import { PreviewModal } from '../modals/PreviewModal';
@@ -11,6 +12,15 @@ interface SharedMessage {
   content: string;
   created_at?: number;
   thinking?: string;
+  meta?: {
+    displayContent?: string;
+    images?: string[];
+    files?: string;
+    timeStr?: string;
+    [key: string]: any;
+  };
+  images?: string[];
+  files?: string;
 }
 
 interface SharedData {
@@ -327,16 +337,138 @@ export const SharedSessionPage: React.FC = () => {
                 const isUser = m.role === 'user';
                 const shareKey = getKey();
                 if (isUser) {
+                  const meta = m.meta || {};
+                  const { cleanText: parsedClean, images: attachedImages, files: attachedFiles } = parseUserMessage(m.content);
+
+                  let displayText = meta.displayContent || parsedClean;
+                  displayText = displayText
+                    .replace(/--- IMAGE:[\s\S]*?--- END [^\n]+ ---/g, '')
+                    .replace(/--- FILE:[\s\S]*?--- END [^\n]+ ---/g, '')
+                    .replace(/\[Attached Files\][\s\S]*?(?:--- END [^\n]+ ---|(?=\n\n)|$)/g, '')
+                    .replace(/\[Attached Files:[^\]]*\]/g, '')
+                    .trim();
+
+                  const rawImages = [
+                    ...(Array.isArray(m.images) ? m.images : []),
+                    ...(Array.isArray(meta.images) ? meta.images : []),
+                    ...attachedImages,
+                  ];
+                  const seen = new Set<string>();
+                  const uniqueImages: string[] = [];
+                  for (const img of rawImages) {
+                    if (!img || typeof img !== 'string') continue;
+                    const trimmed = img.trim();
+                    if (!trimmed || seen.has(trimmed)) continue;
+                    seen.add(trimmed);
+                    uniqueImages.push(trimmed);
+                  }
+
+                  // Filter out plain filenames if we have actual data URLs / HTTP URLs
+                  const hasActualUrls = uniqueImages.some((u) => u.startsWith('data:') || u.startsWith('http') || u.startsWith('/'));
+                  const allImages = hasActualUrls
+                    ? uniqueImages.filter((u) => u.startsWith('data:') || u.startsWith('http') || u.startsWith('/'))
+                    : uniqueImages;
+
+                  const rawFiles = [
+                    ...(m.files ? m.files.split(',').map((s: string) => s.trim()) : []),
+                    ...(meta.files && typeof meta.files === 'string' ? meta.files.split(',').map((s: string) => s.trim()) : []),
+                    ...attachedFiles,
+                  ];
+                  const isImageFileName = (name: string) => /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(name.trim());
+                  const nonImageFiles = Array.from(new Set(rawFiles.filter(Boolean))).filter((fname) => {
+                    if (allImages.length > 0 && isImageFileName(fname)) {
+                      return false;
+                    }
+                    return true;
+                  });
+
                   return (
                     <div key={idx} className="msg user">
                       <div className="user-msg-col">
                         <div className="bubble">
+                          {allImages.length > 0 && (
+                            <div className="user-imgs-gallery" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '6px' }}>
+                              {allImages.map((imgUrl, iIdx) => {
+                                const isDirect = /^(data:|https?:|\/)/.test(imgUrl);
+                                const previewSrc = isDirect ? imgUrl : `/media/shared-session/${encodeURIComponent(shareKey)}/raw?path=${encodeURIComponent(imgUrl)}`;
+                                return (
+                                  <div key={`thumb-wrap-${iIdx}`} style={{ display: 'inline-flex' }}>
+                                    <img
+                                      src={previewSrc}
+                                      className="chat-img-thumb"
+                                      alt="Attachment"
+                                      title="Click to enlarge"
+                                      style={{
+                                        width: '80px',
+                                        height: '56px',
+                                        maxWidth: '80px',
+                                        maxHeight: '56px',
+                                        minWidth: '80px',
+                                        minHeight: '56px',
+                                        objectFit: 'cover',
+                                        borderRadius: '6px',
+                                        cursor: 'zoom-in',
+                                        flexShrink: 0,
+                                      }}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openPreviewModal(previewSrc, 'Attachment', null, 'modal', true);
+                                      }}
+                                      onError={(e) => {
+                                        // If the image fails to load as an img thumbnail, show fallback file pill
+                                        const el = e.currentTarget;
+                                        el.style.display = 'none';
+                                        const pill = el.nextElementSibling as HTMLElement | null;
+                                        if (pill) pill.style.display = 'inline-flex';
+                                      }}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="user-file-pill"
+                                      style={{ display: 'none' }}
+                                      title={`Preview ${imgUrl}`}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openPreviewModal(previewSrc, imgUrl, null, 'modal', true);
+                                      }}
+                                    >
+                                      🖼️ {imgUrl}
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+
                           <div
                             className="user-text select-text"
                             dangerouslySetInnerHTML={{
-                              __html: transformSharedHtml(renderCompleteChatMessage(m.content, undefined, undefined, true), shareKey),
+                              __html: transformSharedHtml(renderCompleteChatMessage(displayText || (allImages.length || nonImageFiles.length ? '' : m.content), undefined, undefined, true), shareKey),
                             }}
                           />
+
+                          {nonImageFiles.length > 0 && (
+                            <div className="user-files-tag" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px', maxWidth: '100%', width: '100%' }}>
+                              {nonImageFiles.map((fName, fIdx) => {
+                                const fileUrl = /^(data:|https?:|\/)/.test(fName) ? fName : `/media/shared-session/${encodeURIComponent(shareKey)}/raw?path=${encodeURIComponent(fName)}`;
+                                return (
+                                  <button
+                                    key={`file-${fIdx}`}
+                                    type="button"
+                                    className="user-file-pill"
+                                    title={`Preview ${fName} in modal`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openPreviewModal(fileUrl, fName, null, 'modal', true);
+                                    }}
+                                  >
+                                    <span style={{ flexShrink: 0 }}>📎</span>
+                                    <span className="user-file-pill-name" style={{ textDecoration: 'underline', textUnderlineOffset: '2px' }}>{fName}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                         {m.created_at ? (
                           <div className="user-bubble-bottom-bar" style={{ display: 'flex', justifyContent: 'flex-end', padding: '2px 4px 0' }}>

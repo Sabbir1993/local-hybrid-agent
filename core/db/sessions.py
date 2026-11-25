@@ -425,9 +425,15 @@ def db_get_shared_session(share_key: str) -> Optional[dict]:
         if role == "assistant" and not content.strip():
             continue
         meta = _load_meta(m["meta"])
+        clean_meta = {}
+        if isinstance(meta, dict) and role == "user":
+            for k in ("displayContent", "images", "files", "timeStr"):
+                if k in meta:
+                    clean_meta[k] = meta[k]
         clean_msgs.append({
             "role": role,
             "content": content,
+            "meta": clean_meta,
             "created_at": m["created_at"],
             "thinking": meta.get("reasoning", "") if isinstance(meta, dict) else "",
         })
