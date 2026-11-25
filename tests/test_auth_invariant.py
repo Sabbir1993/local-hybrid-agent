@@ -43,6 +43,8 @@ PUBLIC_HTTP = {
     ("GET", "/share/{key}"),
     ("GET", "/public/share/{key}"),
     ("GET", "/media/shared-session/{key}"),
+    ("GET", "/media/shared-session/{key}/raw"),
+    ("GET", "/media/shared-session/{key}/download"),
     ("GET", "/api/share/{key}"),
     ("GET", "/assets/{file_path:path}"),
     # MCP sign-in landing page: forwards the provider's redirect to /mcp/oauth/finish (which needs the session) because

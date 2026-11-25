@@ -20,17 +20,68 @@
 .media-who.warn { color: var(--amber); }
 
 /* progress / confirm / error card in the chat */
-.media-live { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; padding: 2px 0; }
-.media-live-head { display: flex; align-items: center; gap: 10px; }
+.media-live { display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; padding: 4px 0; }
+.media-live-head { display: flex; align-items: center; gap: 10px; font-weight: 500; }
 .media-live-head [data-media-elapsed] { font-variant-numeric: tabular-nums; }
 .media-prompt { color: var(--text-muted); font-style: italic; font-size: 12px; overflow-wrap: anywhere; }
 .media-live-text { font-size: 11.5px; }
 .media-bar { height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; max-width: 320px; }
 .media-bar > span { display: block; height: 100%; background: var(--accent); transition: width .3s ease; }
-.media-actions-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.media-actions-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
 .media-actions-row .btn { width: auto; margin: 0; padding: 4px 12px; font-size: 11.5px; }
 .media-confirm { border-left: 3px solid var(--amber); padding-left: 10px; }
 .media-error { border-left: 3px solid var(--red); padding-left: 10px; }
+
+/* Image / Video Generation Skeleton & Shimmer */
+.media-generating-skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--panel2, #1e293b);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin: 8px 0;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+  box-sizing: border-box;
+}
+
+.media-generating-skeleton::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.04) 25%,
+    rgba(255, 255, 255, 0.12) 50%,
+    rgba(255, 255, 255, 0.04) 75%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: mediaShimmerAnim 1.8s infinite linear;
+  pointer-events: none;
+}
+
+[data-theme="light"] .media-generating-skeleton::before,
+[data-theme="ssl-light"] .media-generating-skeleton::before {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.03) 25%,
+    rgba(0, 0, 0, 0.08) 50%,
+    rgba(0, 0, 0, 0.03) 75%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+}
+
+@keyframes mediaShimmerAnim {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
 
 /* under a finished image / video */
 .media-done-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; margin: 4px 0 2px; }

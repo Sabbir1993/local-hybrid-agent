@@ -70,6 +70,65 @@ async def get_public_share(key: str):
     return {"ok": True, **data}
 
 
+@router.get("/media/shared-session/{key}/raw")
+async def shared_session_raw(key: str, path: str):
+    """Serve a file inline for previews in shared sessions (unauthenticated, secured by share_key)."""
+    from core.db import db_get_shared_session
+    from routes.agent.download import _resolve_requested_file, MIME_MAP, VIDEO_MIME
+    data = db_get_shared_session(key)
+    if not data:
+        return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
+
+    p = _resolve_requested_file(path)
+    if p is None or not p.is_file():
+        return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
+
+    suffix = p.suffix.lower()
+    mime = MIME_MAP.get(suffix)
+    if not mime:
+        if suffix in {".html", ".htm"}:
+            mime = "text/html; charset=utf-8"
+        elif suffix in {".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".md", ".txt", ".json", ".log", ".yaml", ".yml", ".toml", ".ini", ".sh", ".bat", ".ps1", ".sql", ".csv"}:
+            mime = "text/plain; charset=utf-8"
+        elif suffix == ".svg":
+            mime = "image/svg+xml"
+        elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            mime = f"image/{suffix.lstrip('.')}"
+        elif suffix in VIDEO_MIME:
+            mime = VIDEO_MIME[suffix]
+        else:
+            mime = "application/octet-stream"
+
+    headers = {
+        "Content-Disposition": f'inline; filename="{p.name}"',
+        "Cache-Control": "no-cache, must-revalidate",
+        "X-Content-Type-Options": "nosniff",
+    }
+    return FileResponse(str(p), media_type=mime, headers=headers)
+
+
+@router.get("/media/shared-session/{key}/download")
+async def shared_session_download(key: str, path: str):
+    """Serve a file as a download attachment in shared sessions (unauthenticated, secured by share_key)."""
+    from core.db import db_get_shared_session
+    from routes.agent.download import _resolve_requested_file, MIME_MAP, VIDEO_MIME
+    data = db_get_shared_session(key)
+    if not data:
+        return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
+
+    p = _resolve_requested_file(path)
+    if p is None or not p.is_file():
+        return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
+
+    suffix = p.suffix.lower()
+    mime = MIME_MAP.get(suffix) or VIDEO_MIME.get(suffix) or "application/octet-stream"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{p.name}"',
+        "Cache-Control": "no-cache, must-revalidate",
+    }
+    return FileResponse(str(p), media_type=mime, headers=headers)
+
+
 # --- Static assets (unauthenticated: CSS/JS/images carry no sensitive data) ---
 @router.get("/static/{file_path:path}")
 async def serve_static(file_path: str):

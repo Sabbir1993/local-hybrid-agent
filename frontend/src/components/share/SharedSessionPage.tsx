@@ -2,6 +2,9 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Copy, Check, Moon, Sun, AlertCircle } from 'lucide-react';
 import { renderCompleteChatMessage } from '../../utils/chatRender';
 import { renderMermaidIn } from '../../utils/mermaid';
+import { useAppStore } from '../../stores/useAppStore';
+import { DiagramModal } from '../modals/DiagramModal';
+import { PreviewModal } from '../modals/PreviewModal';
 
 interface SharedMessage {
   role: 'user' | 'assistant';
@@ -27,6 +30,8 @@ export const SharedSessionPage: React.FC = () => {
     return document.documentElement.getAttribute('data-theme') !== 'light';
   });
 
+  const { openDiagramModal, openPreviewModal } = useAppStore();
+
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
 
@@ -36,6 +41,14 @@ export const SharedSessionPage: React.FC = () => {
     if (path) return path;
     const sp = new URLSearchParams(window.location.search);
     return sp.get('k') || '';
+  };
+
+  const transformSharedHtml = (html: string, shareKey: string): string => {
+    if (!shareKey) return html;
+    // Route file downloads and raw previews to public shared endpoints
+    return html
+      .replace(/\/agent\/download\?path=/g, `/media/shared-session/${encodeURIComponent(shareKey)}/download?path=`)
+      .replace(/\/agent\/raw\?path=/g, `/media/shared-session/${encodeURIComponent(shareKey)}/raw?path=`);
   };
 
   useEffect(() => {
@@ -107,9 +120,11 @@ export const SharedSessionPage: React.FC = () => {
     }
   }, [data]);
 
-  // Code block copy click delegation
+  // Event delegation for code copy, diagrams, previews, and downloads in shared session
   const handleChatClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
+
+    // 1. Code copy
     const copyBtn = target.closest<HTMLButtonElement>('button[data-click="code-copy"]');
     if (copyBtn) {
       const codeBox = copyBtn.closest('.code-block');
@@ -122,6 +137,80 @@ export const SharedSessionPage: React.FC = () => {
           copyBtn.textContent = originalText || '📋 Copy';
         }, 2000);
       }
+      return;
+    }
+
+    // 2. Diagram enlarge / click to view detail in modal
+    const enlargeBtn = target.closest('button[data-click="mermaid-enlarge"]');
+    const onDiagram = enlargeBtn ? null : target.closest('.mermaid-viewport, .mermaid-box svg');
+    const diagramHit = enlargeBtn || onDiagram;
+    if (diagramHit) {
+      const box = diagramHit.closest('.mermaid-box');
+      const svg = (diagramHit.closest('svg') || box?.querySelector('.mermaid-viewport svg')) as SVGSVGElement | null;
+      const picked = window.getSelection();
+      if (svg && !(onDiagram && picked && !picked.isCollapsed)) {
+        e.preventDefault();
+        e.stopPropagation();
+        openDiagramModal(svg, 'Diagram');
+        return;
+      }
+    }
+
+    // 3. Lazy image loading button [data-load-src]
+    const loadImgBtn = target.closest('button[data-load-src]') as HTMLButtonElement | null;
+    if (loadImgBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const src = loadImgBtn.getAttribute('data-load-src') || '';
+      const alt = loadImgBtn.getAttribute('data-load-alt') || 'Image';
+      const img = document.createElement('img');
+      img.src = src;
+      img.alt = alt;
+      img.title = 'Click to enlarge';
+      img.setAttribute('data-preview-path', src);
+      img.setAttribute('data-preview-title', alt);
+      img.style.cursor = 'pointer';
+      img.referrerPolicy = 'no-referrer';
+      const thumbWrap = loadImgBtn.closest('.media-card-thumb-wrap');
+      if (thumbWrap) {
+        img.className = 'media-card-thumb chat-inline-img';
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'cover';
+        thumbWrap.replaceChildren(img);
+      } else {
+        img.className = 'chat-inline-img';
+        loadImgBtn.replaceWith(img);
+      }
+      return;
+    }
+
+    // 4. File preview [data-preview-path]
+    const prevBtn = target.closest('[data-preview-path]') as HTMLElement | null;
+    if (prevBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const rawPath = prevBtn.getAttribute('data-preview-path') || '';
+      const title = prevBtn.getAttribute('data-preview-title') || prevBtn.innerText || rawPath;
+      const shareKey = getKey();
+      const previewUrl = (rawPath.startsWith('http://') || rawPath.startsWith('https://') || rawPath.startsWith('/media/'))
+        ? rawPath
+        : `/media/shared-session/${encodeURIComponent(shareKey)}/raw?path=${encodeURIComponent(rawPath)}`;
+      openPreviewModal(previewUrl, title, null, 'modal', true);
+      return;
+    }
+
+    // 5. Image click for modal preview
+    const imgEl = target.closest('.bubble img, .bot-content img, .media-card img, .chat-inline-img') as HTMLImageElement | null;
+    if (imgEl && !target.closest('button, a')) {
+      e.preventDefault();
+      e.stopPropagation();
+      const src = imgEl.src || imgEl.getAttribute('data-preview-path') || '';
+      const title = imgEl.alt || imgEl.title || 'Image preview';
+      if (src) {
+        openPreviewModal(src, title, null, 'modal', true);
+      }
+      return;
     }
   };
 
@@ -236,6 +325,7 @@ export const SharedSessionPage: React.FC = () => {
               {/* Messages in exact Chat Mode styling */}
               {data.messages.map((m, idx) => {
                 const isUser = m.role === 'user';
+                const shareKey = getKey();
                 if (isUser) {
                   return (
                     <div key={idx} className="msg user">
@@ -244,7 +334,7 @@ export const SharedSessionPage: React.FC = () => {
                           <div
                             className="user-text select-text"
                             dangerouslySetInnerHTML={{
-                              __html: renderCompleteChatMessage(m.content, undefined, undefined, true),
+                              __html: transformSharedHtml(renderCompleteChatMessage(m.content, undefined, undefined, true), shareKey),
                             }}
                           />
                         </div>
@@ -267,7 +357,7 @@ export const SharedSessionPage: React.FC = () => {
                       <div
                         className="bot-content select-text"
                         dangerouslySetInnerHTML={{
-                          __html: renderCompleteChatMessage(m.content, undefined, undefined, true),
+                          __html: transformSharedHtml(renderCompleteChatMessage(m.content, undefined, undefined, true), shareKey),
                         }}
                       />
                       <div
@@ -316,6 +406,10 @@ export const SharedSessionPage: React.FC = () => {
       <footer className="shrink-0 border-t border-[var(--border,rgba(240,246,252,0.08))] py-2.5 text-center text-xs text-[var(--dim,#8b949e)] bg-[var(--bg,#0d1117)]">
         <span>SSL AI · Public Shared Chat View</span>
       </footer>
+
+      {/* Preview & Diagram Modals for shared sessions */}
+      <PreviewModal />
+      <DiagramModal />
     </div>
   );
 };

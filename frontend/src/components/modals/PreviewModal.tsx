@@ -20,7 +20,7 @@ export const PreviewModal: React.FC = () => {
 
   const enc = encodeURIComponent(filePath || '');
   const isWs = source === 'ws';
-  const isDirectUrl = filePath.startsWith('http://') || filePath.startsWith('https://') || filePath.startsWith('/agent/') || filePath.startsWith('data:') || filePath.startsWith('blob:');
+  const isDirectUrl = filePath.startsWith('http://') || filePath.startsWith('https://') || filePath.startsWith('/agent/') || filePath.startsWith('/media/') || filePath.startsWith('data:') || filePath.startsWith('blob:');
   const rawUrl = isDirectUrl
     ? filePath
     : isWs
@@ -28,7 +28,9 @@ export const PreviewModal: React.FC = () => {
       : `/agent/raw?path=${enc}`;
   const dlUrl = filePath.startsWith('http') || filePath.startsWith('data:') || filePath.startsWith('blob:')
     ? filePath
-    : `/agent/download?path=${enc}`;
+    : filePath.startsWith('/media/shared-session/')
+      ? filePath.replace('/raw?', '/download?')
+      : `/agent/download?path=${enc}`;
 
   const isImage = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'ico', 'bmp'].includes(ext) ||
     filePath.startsWith('data:image/') ||

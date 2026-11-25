@@ -541,10 +541,11 @@ export const ChatArea: React.FC = () => {
 
     // 4b. A drawn diagram: its Enlarge button, or a click on the diagram itself, opens the large view with zoom
     const enlargeBtn = target.closest('button[data-click="mermaid-enlarge"]');
-    const onDiagram = enlargeBtn ? null : target.closest('.mermaid-box.drawn .mermaid-viewport');
+    const onDiagram = enlargeBtn ? null : target.closest('.mermaid-viewport, .mermaid-box svg');
     const diagramHit = enlargeBtn || onDiagram;
     if (diagramHit) {
-      const svg = diagramHit.closest('.mermaid-box')?.querySelector('.mermaid-viewport svg');
+      const box = diagramHit.closest('.mermaid-box');
+      const svg = (diagramHit.closest('svg') || box?.querySelector('.mermaid-viewport svg')) as SVGSVGElement | null;
       const picked = window.getSelection();
       if (svg && !(onDiagram && picked && !picked.isCollapsed)) {   // not while the user is selecting text
         e.preventDefault();

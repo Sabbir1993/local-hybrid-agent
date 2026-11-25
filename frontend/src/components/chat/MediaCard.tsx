@@ -38,6 +38,10 @@ export const MediaCard: React.FC<{ m: ChatMessage }> = ({ m }) => {
 
   if (md.state === 'not_loaded') {
     const what = md.laneLabel ? <b>{md.laneLabel}</b> : <>the {word} model</>;
+    const aspect = md.opts?.aspect || (md.kind === 'video' ? 'wide' : 'square');
+    const aspectRatio = aspect === 'wide' ? '16 / 9' : aspect === 'tall' ? '2 / 3' : '1 / 1';
+    const maxWidth = aspect === 'tall' ? '300px' : aspect === 'wide' ? '560px' : '420px';
+
     if (md.loading) {
       return (
         <div className="media-live" role="status" aria-live="polite">
@@ -46,6 +50,25 @@ export const MediaCard: React.FC<{ m: ChatMessage }> = ({ m }) => {
             <span>{icon} Loading {what} on this PC · {elapsed}</span>
           </div>
           {prompt}
+          <div
+            className="media-generating-skeleton"
+            style={{
+              width: '100%',
+              maxWidth,
+              aspectRatio,
+              minHeight: '180px',
+              maxHeight: '420px',
+            }}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', zIndex: 1, padding: '16px', textAlign: 'center' }}>
+              <div style={{ width: '42px', height: '42px', borderRadius: '50%', background: 'var(--panel, rgba(0,0,0,0.25))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.12)' }}>
+                {icon}
+              </div>
+              <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted, #94a3b8)' }}>
+                Loading {word} model…
+              </span>
+            </div>
+          </div>
           <div className="media-live-text dim">
             Big models take a few minutes to load. Your {word} starts as soon as it’s ready, and the model stays loaded for the next one.
           </div>
@@ -118,6 +141,10 @@ export const MediaCard: React.FC<{ m: ChatMessage }> = ({ m }) => {
   }
 
   // starting / running
+  const aspect = md.opts?.aspect || (md.kind === 'video' ? 'wide' : 'square');
+  const aspectRatio = aspect === 'wide' ? '16 / 9' : aspect === 'tall' ? '2 / 3' : '1 / 1';
+  const maxWidth = aspect === 'tall' ? '300px' : aspect === 'wide' ? '560px' : '420px';
+
   return (
     <div className="media-live" role="status" aria-live="polite">
       <div className="media-live-head">
@@ -125,6 +152,45 @@ export const MediaCard: React.FC<{ m: ChatMessage }> = ({ m }) => {
         <span>{icon} Making {word === 'image' ? 'an image' : 'a video'}{md.model ? <> with <b>{md.model}</b></> : null} · {elapsed}</span>
       </div>
       {prompt}
+
+      {/* Shimmer skeleton with exact same size and aspect ratio as final media */}
+      <div
+        className="media-generating-skeleton"
+        style={{
+          width: '100%',
+          maxWidth,
+          aspectRatio,
+          minHeight: '200px',
+          maxHeight: '420px',
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', zIndex: 1, padding: '16px', textAlign: 'center' }}>
+          <div
+            style={{
+              width: '44px',
+              height: '44px',
+              borderRadius: '50%',
+              background: 'var(--panel, rgba(0,0,0,0.25))',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '22px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+            }}
+          >
+            {icon}
+          </div>
+          <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted, #94a3b8)' }}>
+            Generating {word}…
+          </span>
+          {typeof md.pct === 'number' && (
+            <span style={{ fontSize: '11px', color: 'var(--accent, #6366f1)', fontWeight: 500 }}>
+              {Math.round(md.pct)}%
+            </span>
+          )}
+        </div>
+      </div>
+
       <div className="media-live-text dim">{md.text || ''}{md.kind === 'video' ? ' · videos can take several minutes' : ''}</div>
       {typeof md.pct === 'number' && (
         <div className="media-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={md.pct}>

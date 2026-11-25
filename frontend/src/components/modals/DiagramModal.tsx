@@ -8,6 +8,9 @@ const STEP = 1.25;
 function naturalSize(svg: SVGSVGElement): { w: number; h: number } {
   const vb = svg.viewBox && svg.viewBox.baseVal;
   if (vb && vb.width > 0 && vb.height > 0) return { w: vb.width, h: vb.height };
+  const widthAttr = parseFloat(svg.getAttribute('width') || '');
+  const heightAttr = parseFloat(svg.getAttribute('height') || '');
+  if (widthAttr > 0 && heightAttr > 0) return { w: widthAttr, h: heightAttr };
   const r = svg.getBoundingClientRect();
   return { w: r.width || 800, h: r.height || 600 };
 }
@@ -36,7 +39,9 @@ export const DiagramModal: React.FC = () => {
 
   const fit = useCallback(() => {
     const { w, h } = stageSize();
-    setView(fitView(w, h, sizeRef.current.w, sizeRef.current.h));
+    if (w > 0 && h > 0 && sizeRef.current.w > 0 && sizeRef.current.h > 0) {
+      setView(fitView(w, h, sizeRef.current.w, sizeRef.current.h));
+    }
   }, []);
 
   const actualSize = useCallback(() => {
@@ -52,7 +57,11 @@ export const DiagramModal: React.FC = () => {
   // copy the drawn diagram in at its natural size, then fit it to the window
   useLayoutEffect(() => {
     if (!isOpen || !node) return;
-    const svg = (node instanceof SVGSVGElement ? node : node.querySelector('svg')) as SVGSVGElement | null;
+    const svg = (
+      node instanceof SVGSVGElement
+        ? node
+        : (node as HTMLElement).closest?.('svg') || node.querySelector?.('svg')
+    ) as SVGSVGElement | null;
     const canvas = canvasRef.current;
     if (!svg || !canvas) return;
     const { w, h } = naturalSize(svg);
@@ -68,9 +77,25 @@ export const DiagramModal: React.FC = () => {
     pointers.current.clear();
     pinchPrev.current = null;
     setDragging(false);
+    
+    // Fit immediately, and schedule another in next animation frame to ensure stage size is laid out
     fit();
-    return () => canvas.replaceChildren();
+    const raf = requestAnimationFrame(() => fit());
+    return () => {
+      cancelAnimationFrame(raf);
+      canvas.replaceChildren();
+    };
   }, [isOpen, node, fit]);
+
+  // Keep fitted on window resize or container size changes
+  useEffect(() => {
+    if (!isOpen || !stageRef.current) return;
+    const ro = new ResizeObserver(() => {
+      fit();
+    });
+    ro.observe(stageRef.current);
+    return () => ro.disconnect();
+  }, [isOpen, fit]);
 
   // keys
   useEffect(() => {
