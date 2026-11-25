@@ -52,8 +52,87 @@ def _react_index():
 @router.get("/report")
 @router.get("/audit")
 @router.get("/db")
-async def react_app():
+@router.get("/share")
+@router.get("/share/{key}")
+async def react_app(key: str = ""):
     return _react_index()
+
+
+@router.get("/media/shared-session/{key}")
+@router.get("/public/share/{key}")
+@router.get("/api/share/{key}")
+async def get_public_share(key: str):
+    """Public read-only session data by secure share_key. Unauthenticated by design."""
+    from core.db import db_get_shared_session
+    data = db_get_shared_session(key)
+    if not data:
+        return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
+    return {
+        "ok": True,
+        "title": data["title"],
+        "created_at": data["created_at"],
+        "shared_at": data["shared_at"],
+        "messages": data["messages"],
+    }
+
+
+@router.get("/media/shared-session/{key}/raw")
+async def shared_session_raw(key: str, path: str):
+    """Serve a file inline for previews in shared sessions (unauthenticated, secured by share_key)."""
+    from core.db import db_get_shared_session
+    from routes.agent.download import _resolve_requested_file, MIME_MAP, VIDEO_MIME
+    data = db_get_shared_session(key)
+    if not data:
+        return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
+
+    p = _resolve_requested_file(path, recover=False, user_id=data.get("user_id"))
+    if p is None or not p.is_file():
+        return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
+
+    suffix = p.suffix.lower()
+    mime = MIME_MAP.get(suffix)
+    if not mime:
+        if suffix in {".html", ".htm"}:
+            mime = "text/html; charset=utf-8"
+        elif suffix in {".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".md", ".txt", ".json", ".log", ".yaml", ".yml", ".toml", ".ini", ".sh", ".bat", ".ps1", ".sql", ".csv"}:
+            mime = "text/plain; charset=utf-8"
+        elif suffix == ".svg":
+            mime = "image/svg+xml"
+        elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            mime = f"image/{suffix.lstrip('.')}"
+        elif suffix in VIDEO_MIME:
+            mime = VIDEO_MIME[suffix]
+        else:
+            mime = "application/octet-stream"
+
+    headers = {
+        "Content-Disposition": f'inline; filename="{p.name}"',
+        "Cache-Control": "no-cache, must-revalidate",
+        "X-Content-Type-Options": "nosniff",
+    }
+    return FileResponse(str(p), media_type=mime, headers=headers)
+
+
+@router.get("/media/shared-session/{key}/download")
+async def shared_session_download(key: str, path: str):
+    """Serve a file as a download attachment in shared sessions (unauthenticated, secured by share_key)."""
+    from core.db import db_get_shared_session
+    from routes.agent.download import _resolve_requested_file, MIME_MAP, VIDEO_MIME
+    data = db_get_shared_session(key)
+    if not data:
+        return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
+
+    p = _resolve_requested_file(path, recover=False, user_id=data.get("user_id"))
+    if p is None or not p.is_file():
+        return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
+
+    suffix = p.suffix.lower()
+    mime = MIME_MAP.get(suffix) or VIDEO_MIME.get(suffix) or "application/octet-stream"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{p.name}"',
+        "Cache-Control": "no-cache, must-revalidate",
+    }
+    return FileResponse(str(p), media_type=mime, headers=headers)
 
 
 # --- Static assets (unauthenticated: CSS/JS/images carry no sensitive data) ---

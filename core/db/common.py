@@ -38,6 +38,14 @@ def _init_projects_db() -> ThreadLocalDB:
         created_at REAL NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+    CREATE TABLE IF NOT EXISTS shared_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
+        share_key TEXT UNIQUE NOT NULL,
+        created_at REAL NOT NULL,
+        user_id INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_shared_sessions_key ON shared_sessions(share_key);
     CREATE TABLE IF NOT EXISTS plan_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,

@@ -25,7 +25,7 @@ async function loadSpeechCorpusPanel() {
     return;
   }
   box.innerHTML = `
-    <div style="padding:10px 4px;display:flex;flex-direction:column;gap:16px;max-width:640px">
+    <div style="padding:10px 4px;display:flex;flex-direction:column;gap:16px;width:100%;box-sizing:border-box">
       <label style="display:flex;align-items:center;gap:8px;font-size:13px">
         <input type="checkbox" id="vc-enabled" ${st.enabled ? 'checked' : ''}>
         <span><strong>Enable voice collection page</strong> &nbsp;<code>${esc(st.path)}</code></span>
@@ -39,9 +39,9 @@ async function loadSpeechCorpusPanel() {
         ${st.dir_error ? `<div style="color:var(--red,#f87171);margin-top:4px">${esc(st.dir_error)}</div>` : ''}
         <div class="dim" style="margin-top:4px">Set <code>speech_corpus.dir</code> in config/app.json (an absolute folder outside the app). ${st.lines_per_session} lines per session, clips up to ${st.max_clip_seconds} s, ${st.sessions_per_day} sessions per person per day.</div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:8px">
+      <div style="display:flex;flex-direction:column;gap:8px;width:100%">
         <div style="font-weight:600;font-size:13px">Link for colleagues</div>
-        <div id="vc-link" style="display:${st.link_path ? 'flex' : 'none'};gap:8px;align-items:stretch;flex-wrap:wrap">
+        <div id="vc-link" style="display:${st.link_path ? 'flex' : 'none'};gap:8px;align-items:stretch;flex-wrap:wrap;width:100%;box-sizing:border-box">
           <input type="text" id="vc-link-text" readonly value="${esc(st.link_path ? window.location.origin + st.link_path : '')}" style="flex:1 1 280px;min-width:0;height:40px;box-sizing:border-box;margin:0;font-family:monospace;font-size:12px">
           <div style="display:flex;gap:8px">
             <button type="button" class="btn accent" id="vc-copy" style="${VC_ROW_BTN}">Copy link</button>
@@ -55,25 +55,29 @@ async function loadSpeechCorpusPanel() {
         <div>
           <button type="button" class="btn" id="vc-rotate" style="width:auto;padding:6px 14px">${st.has_code ? 'Create new link (old link stops working)' : 'Create link'}</button>
         </div>
-        <div class="vc-window" style="margin-top:6px;padding:14px;border:1px solid var(--sp-line-strong,var(--border,#3a4150));border-radius:12px;display:flex;flex-direction:column;gap:12px">
+        <div class="vc-window" style="margin-top:6px;padding:14px;border:1px solid var(--sp-line-strong,var(--border,#3a4150));border-radius:12px;display:flex;flex-direction:column;gap:12px;width:100%;box-sizing:border-box">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
             <span style="font-weight:600;font-size:13px">Open dates</span>
             <span id="vc-window-state" style="font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px"></span>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">
             <div style="display:flex;flex-direction:column;gap:6px">
               <span class="dim" style="font-size:12px;font-weight:600">Opens</span>
-              <div style="display:flex;gap:6px;align-items:center">
+              <div style="display:flex;gap:8px;align-items:center">
                 <input type="datetime-local" id="vc-from" style="flex:1;min-width:0">
-                <button type="button" class="btn" data-clear="vc-from" title="Clear: open from now" style="width:38px;padding:0 !important">✕</button>
+                <button type="button" class="vc-clear-btn" data-clear="vc-from" title="Clear: open from now" aria-label="Clear open date">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
               </div>
               <span class="dim" style="font-size:11px">Empty = open from now</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:6px">
               <span class="dim" style="font-size:12px;font-weight:600">Closes</span>
-              <div style="display:flex;gap:6px;align-items:center">
+              <div style="display:flex;gap:8px;align-items:center">
                 <input type="datetime-local" id="vc-until" style="flex:1;min-width:0">
-                <button type="button" class="btn" data-clear="vc-until" title="Clear: no end date" style="width:38px;padding:0 !important">✕</button>
+                <button type="button" class="vc-clear-btn" data-clear="vc-until" title="Clear: no end date" aria-label="Clear close date">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
               </div>
               <span class="dim" style="font-size:11px">Empty = no end date</span>
             </div>
@@ -93,7 +97,7 @@ async function loadSpeechCorpusPanel() {
           <div class="dim" style="font-size:11px;line-height:1.5">Times are in this computer's time zone. Outside these dates the page tells people when it opens or that it has closed; someone already recording can finish their lines. Extending keeps the same link.</div>
         </div>
       </div>
-      <div>
+      <div style="width:100%">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px">
           <div style="font-weight:600;font-size:13px">Lines people read</div>
           <button type="button" class="btn" id="vc-sample" style="width:auto;padding:6px 14px">⬇ Download sample file</button>
@@ -104,12 +108,12 @@ async function loadSpeechCorpusPanel() {
           <strong>banglish</strong> Bangla and English mixed · <strong>numbers</strong> amounts, dates, times.
           Lines already imported are skipped; lines with card-like numbers are refused.
         </div>
-        <label id="vc-drop" for="vc-prompts" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:18px 12px;border:1.5px dashed var(--border,#3a4150);border-radius:10px;cursor:pointer;text-align:center;transition:border-color .15s,background .15s">
+        <label id="vc-drop" for="vc-prompts" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:18px 12px;border:1.5px dashed var(--border,#3a4150);border-radius:10px;cursor:pointer;text-align:center;transition:border-color .15s,background .15s;width:100%;box-sizing:border-box">
           <input type="file" id="vc-prompts" accept=".jsonl,.json,.txt" style="display:none">
           <span style="font-size:22px;line-height:1">📄</span>
           <span style="font-size:13px">Drop a <code>.jsonl</code> file here, or <span style="text-decoration:underline">choose a file</span></span>
         </label>
-        <div id="vc-file" style="display:none;margin-top:8px;padding:10px 12px;border:1px solid var(--border,#3a4150);border-radius:10px;font-size:12px">
+        <div id="vc-file" style="display:none;margin-top:8px;padding:10px 12px;border:1px solid var(--border,#3a4150);border-radius:10px;font-size:12px;width:100%;box-sizing:border-box">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <span style="font-weight:600" id="vc-file-name"></span>
             <span class="dim" id="vc-file-info"></span>
@@ -192,7 +196,12 @@ async function loadSpeechCorpusPanel() {
   const dark = (0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]) < 128;
   box.querySelectorAll('input[type="datetime-local"]').forEach((i) => { i.style.colorScheme = dark ? 'dark' : 'light'; });
   box.querySelectorAll('[data-clear]').forEach((b) => b.addEventListener('click', () => {
-    box.querySelector('#' + b.getAttribute('data-clear')).value = '';
+    const input = box.querySelector('#' + b.getAttribute('data-clear'));
+    if (input) {
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
   }));
   showWindow(st);
   box.querySelector('#vc-window-save').addEventListener('click', () =>

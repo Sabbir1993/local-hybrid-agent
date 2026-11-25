@@ -240,6 +240,16 @@ class TableNames(unittest.TestCase):
             self.q("SELECT * FROM T9")
         self.assertIn("no such table", str(cm.exception))
 
+    def test_placeholder_handle_resolves_via_unique_columns(self):
+        # Querying with a hallucinatory handle (e.g. K12) when columns match Sales uniquely
+        out = self.q('SELECT "Revenue", "Region" FROM K12 WHERE "Revenue" > 100')
+        self.assertIn("Dhaka", out)
+
+    def test_placeholder_handle_resolves_when_single_table(self):
+        single_wb = sql.from_tables([("Single_Report", "report.xlsx", ["Metric", "Val"], [["Sales", 10]], "Sheet1", "K1")])
+        out = sql.query(single_wb, "SELECT * FROM K12")
+        self.assertIn("Sales", out)
+
     def test_the_query_itself_is_never_changed_beyond_the_table_name(self):
         out = self.q('SELECT Region, COUNT(*) n FROM Sales GROUP BY Region ORDER BY Region')
         self.assertIn("| Dhaka | 3 |", out)

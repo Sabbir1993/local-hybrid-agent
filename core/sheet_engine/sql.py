@@ -759,6 +759,40 @@ def _handle_of(wb: Workbook, name: str) -> str:
     return next((str(t.get("handle")) for t in wb.tables if t["name"] == name), "?")
 
 
+def _find_table_by_columns(wb: Workbook, sql: str) -> str:
+    """If a single FROM table reference could not be resolved by name/handle (e.g. LLM used placeholder K12),
+    check if the SQL references columns unique to one loaded table.
+    """
+    low_sql = sql.lower()
+    scores = {}
+    for t in wb.tables:
+        count = 0
+        for col, _ in t.get("cols", []):
+            clow = col.lower()
+            if len(clow) < 3 or clow in ("id", "row", "date", "time", "name", "type", "status", "value"):
+                if f'"{clow}"' in low_sql:
+                    count += 1
+                continue
+            if f'"{clow}"' in low_sql or f"'{clow}'" in low_sql:
+                count += 3
+            elif re.search(r'\b' + re.escape(clow) + r'\b', low_sql):
+                count += 2
+        if count > 0:
+            scores[t["name"]] = count
+    if not scores:
+        return ""
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    best_name, best_score = sorted_scores[0]
+    # Unambiguous if at least 3 points and strictly higher than second best
+    if best_score >= 3:
+        if len(sorted_scores) == 1 or sorted_scores[1][1] < best_score:
+            return best_name
+    return ""
+
+
+_PLACEHOLDER_TABLE_RX = re.compile(r"^(?:[kt]\d+|table\d*|sheet\d*|data|kb|kb_table|df|mytable)$", re.I)
+
+
 def _rewrite_tables(wb: Workbook, sql: str) -> tuple:
     """Point the FROM/JOIN references at the tables that are really loaded.
 
@@ -789,6 +823,12 @@ def _rewrite_tables(wb: Workbook, sql: str) -> tuple:
                         raise SqlError(f"there is no table '{n}'. The closest is {ref[0]} (handle {_handle_of(wb, ref[0])}): use its "
                                        f"exact name or its handle in FROM. All tables: "
                                        + ", ".join(f"{t['name']} = {t.get('handle')}" for t in wb.tables[:_MAX_HINT_NAMES]) + ".")
+                    if not ref[0] and len(parsed) == 1 and _PLACEHOLDER_TABLE_RX.match(n):
+                        # Fallback for single-table queries with an unresolvable handle/placeholder (e.g. K12, T1, table):
+                        # if only one table is loaded, or if query columns uniquely identify one table.
+                        cand = wb.tables[0]["name"] if len(wb.tables) == 1 else _find_table_by_columns(wb, sql)
+                        if cand:
+                            ref = (cand, "guess")
                     resolved.append(ref)
             if all(r for r, _k in resolved):
                 out = []

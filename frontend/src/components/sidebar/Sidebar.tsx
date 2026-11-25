@@ -205,13 +205,24 @@ export const Sidebar: React.FC = () => {
     }
   };
 
-  const handleShare = (sid: string | number) => {
+  const handleShare = async (sid: string | number) => {
     setMenuState(null);
-    const url = `${window.location.origin}/?session=${sid}&share=1`;
-    navigator.clipboard.writeText(url).then(
-      () => showToast('Shareable link copied to clipboard!', 'success'),
-      () => showToast(`Share URL: ${url}`, 'info'),
-    );
+    try {
+      const resp = await apiFetch(`/control/sessions/${sid}/share`, { method: 'POST' });
+      if (!resp.ok) {
+        showToast('Failed to create share link', 'error');
+        return;
+      }
+      const data = await resp.json();
+      const shareUrl = data.share_url || `/share/${data.share_key}`;
+      const url = `${window.location.origin}${shareUrl}`;
+      navigator.clipboard.writeText(url).then(
+        () => showToast('Public share link copied to clipboard!', 'success'),
+        () => showToast(`Share URL: ${url}`, 'info'),
+      );
+    } catch (_) {
+      showToast('Failed to create share link', 'error');
+    }
   };
 
   const handleExportSession = async (sid: string | number, titleHint: string) => {

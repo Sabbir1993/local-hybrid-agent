@@ -62,8 +62,8 @@ def tool_write_file_common(args: dict) -> str:
 
     if args.get("_oversize_tokens"):
         # the stream was cut at the per-call cap and the body dropped: say so, not "empty" (the model would send the same giant call again)
-        from .limits import agent_limit
-        cap = agent_limit("write_file_max_tokens")
+        from .limits import write_cap_tokens
+        cap = write_cap_tokens()
         return (f"error: nothing was saved: the file was about {args['_oversize_tokens']} tokens and one write_file call may carry at most {cap}. "
                 f"Call write_file again with a COMPLETE but much shorter file (under {int(cap * 0.6)} tokens: fewer sections, short text, "
                 "inline CSS, no repeated cards). Do not repeat the same long content.")
@@ -160,8 +160,12 @@ def tool_write_file_common(args: dict) -> str:
     if doc_ops.is_doc(p.name) and p.is_file():
         from .. import doc_store
         from ..doc_ops.base import sha256
-        doc_store.register(get_current_user_id(), p.name, p.suffix.lstrip(".").lower(),
-                           source_spec=spec, sha256=sha256(p.read_bytes()))
+        try:
+            doc_store.register(get_current_user_id(), p.name, p.suffix.lstrip(".").lower(),
+                               source_spec=spec, sha256=sha256(p.read_bytes()))
+        except Exception as e:
+            import sys
+            print(f"[write_file] doc_store.register skipped ({type(e).__name__}: {e})", file=sys.stderr)
     return msg
 
 

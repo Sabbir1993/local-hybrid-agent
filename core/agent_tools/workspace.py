@@ -142,8 +142,12 @@ def _within(p: Path, root: Path) -> bool:
     return rp == rr or rp.startswith(rr.rstrip("/" + os.sep) + os.sep)
 
 
-def _common_resolve(rel: str) -> Path:
-    common = common_workspace()
+def _common_resolve(rel: str, user_id: Optional[int] = None) -> Path:
+    if user_id is not None:
+        common = user_common_root(user_id)
+        common.mkdir(parents=True, exist_ok=True)
+    else:
+        common = common_workspace()
     clean = str(rel).strip().replace("\\", "/")
 
     common_str = str(common).replace("\\", "/")

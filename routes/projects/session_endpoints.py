@@ -11,6 +11,8 @@ from core.db import (
     db_create_session,
     db_delete_session,
     db_fork_session,
+    db_create_or_get_share,
+    db_revoke_share,
     db_list_sessions_page,
     db_session_groups,
     db_load_messages,
@@ -163,3 +165,25 @@ async def set_session_memory(sid: int, req: SessionMemoryReq, user: Principal = 
     from core import working_memory
     working_memory.save(sid, user.id, req.content)
     return {"ok": True}
+
+
+@router.post("/control/sessions/{sid}/share")
+async def share_session(sid: int, user: Principal = Depends(get_current_user)):
+    try:
+        share_key = db_create_or_get_share(sid, user.id)
+    except PermissionError:
+        return JSONResponse({"error": "session not found"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "share_key": share_key, "share_url": f"/share/{share_key}"}
+
+
+@router.delete("/control/sessions/{sid}/share")
+async def unshare_session(sid: int, user: Principal = Depends(get_current_user)):
+    try:
+        revoked = db_revoke_share(sid, user.id)
+    except PermissionError:
+        return JSONResponse({"error": "session not found"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "revoked": revoked}
