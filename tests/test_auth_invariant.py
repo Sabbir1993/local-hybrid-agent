@@ -39,6 +39,9 @@ PUBLIC_HTTP = {
     # the React app shell hosts its own login page, and its built bundle is public like /static (no data in either);
     # every API it calls still resolves a principal
     ("GET", "/react"),
+    ("GET", "/share"),
+    ("GET", "/share/{key}"),
+    ("GET", "/public/share/{key}"),
     ("GET", "/assets/{file_path:path}"),
     # MCP sign-in landing page: forwards the provider's redirect to /mcp/oauth/finish (which needs the session) because
     # the SameSite=Strict cookie is not sent on a navigation that starts on the provider's site; it holds no data

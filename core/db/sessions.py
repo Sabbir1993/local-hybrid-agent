@@ -1,4 +1,5 @@
 import json
+import secrets
 import time
 from typing import Optional
 
@@ -378,3 +379,70 @@ def db_session_groups(owner_user_id: int, kind: str, group_ids: list, per_group:
             "is_pinned": bool(r["is_pinned"]) if "is_pinned" in r.keys() and r["is_pinned"] else False,
         } for r in rs[:per]]}
     return out
+
+
+def db_create_or_get_share(sid: int, owner_user_id: int) -> str:
+    """Return an existing share_key or create a new cryptographic share key for a session owned by owner_user_id."""
+    if owner_user_id is None or db_session_owner(sid) != owner_user_id:
+        raise PermissionError("not your session")
+    row = _projects_db.execute("SELECT share_key FROM shared_sessions WHERE session_id = ?", (sid,)).fetchone()
+    if row:
+        return row["share_key"]
+    share_key = secrets.token_urlsafe(24)
+    with transaction(_projects_db):
+        _projects_db.execute(
+            "INSERT INTO shared_sessions (session_id, share_key, created_at, user_id) VALUES (?, ?, ?, ?)",
+            (sid, share_key, time.time(), owner_user_id),
+        )
+    return share_key
+
+
+def db_get_shared_session(share_key: str) -> Optional[dict]:
+    """Retrieve shared session info and messages by share_key (no auth needed)."""
+    if not share_key or not isinstance(share_key, str):
+        return None
+    row = _projects_db.execute(
+        "SELECT s.id, s.title, s.created_at, sh.created_at as shared_at "
+        "FROM shared_sessions sh "
+        "JOIN sessions s ON s.id = sh.session_id "
+        "WHERE sh.share_key = ?",
+        (share_key.strip(),),
+    ).fetchone()
+    if not row:
+        return None
+    sid = row["id"]
+    raw_msgs = _projects_db.execute(
+        "SELECT role, content, meta, created_at FROM messages WHERE session_id = ? ORDER BY id",
+        (sid,),
+    ).fetchall()
+    clean_msgs = []
+    for m in raw_msgs:
+        role = m["role"]
+        if role not in ("user", "assistant"):
+            continue
+        content = m["content"] or ""
+        # Skip empty assistant messages (e.g. intermediate tool-only calls)
+        if role == "assistant" and not content.strip():
+            continue
+        meta = _load_meta(m["meta"])
+        clean_msgs.append({
+            "role": role,
+            "content": content,
+            "created_at": m["created_at"],
+            "thinking": meta.get("reasoning", "") if isinstance(meta, dict) else "",
+        })
+    return {
+        "title": row["title"],
+        "created_at": row["created_at"],
+        "shared_at": row["shared_at"],
+        "messages": clean_msgs,
+    }
+
+
+def db_revoke_share(sid: int, owner_user_id: int) -> bool:
+    """Revoke/delete an existing share link for a session."""
+    if owner_user_id is None or db_session_owner(sid) != owner_user_id:
+        raise PermissionError("not your session")
+    with transaction(_projects_db):
+        cur = _projects_db.execute("DELETE FROM shared_sessions WHERE session_id = ?", (sid,))
+    return cur.rowcount > 0

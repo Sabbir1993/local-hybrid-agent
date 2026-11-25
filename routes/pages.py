@@ -52,8 +52,20 @@ def _react_index():
 @router.get("/report")
 @router.get("/audit")
 @router.get("/db")
-async def react_app():
+@router.get("/share")
+@router.get("/share/{key}")
+async def react_app(key: str = ""):
     return _react_index()
+
+
+@router.get("/public/share/{key}")
+async def get_public_share(key: str):
+    """Public read-only session data by secure share_key. Unauthenticated by design."""
+    from core.db import db_get_shared_session
+    data = db_get_shared_session(key)
+    if not data:
+        return JSONResponse({"error": "Shared session not found or link has expired"}, status_code=404)
+    return {"ok": True, **data}
 
 
 # --- Static assets (unauthenticated: CSS/JS/images carry no sensitive data) ---

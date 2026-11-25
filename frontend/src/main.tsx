@@ -8,14 +8,23 @@ import { dismissBootLoader } from './components/common/AppLoader'
 // /voice is the public voice-collection page: no sign-in, none of the app's start-up calls (routes/speech_corpus.py)
 const VoiceCollectPage = lazy(() => import('./components/voice-collect/VoiceCollectPage'))
 const isVoicePage = window.location.pathname.replace(/\/+$/, '') === '/voice'
-if (isVoicePage) dismissBootLoader()
+
+// /share is the public read-only session sharing page: no login, no sidebar, no composer, no navbar
+const SharedSessionPage = lazy(() => import('./components/share/SharedSessionPage'))
+const isSharePage = window.location.pathname.replace(/\/+$/, '').startsWith('/share')
+
+if (isVoicePage || isSharePage) dismissBootLoader()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary fallbackTitle="The app crashed">
-      {isVoicePage
-        ? <Suspense fallback={null}><VoiceCollectPage /></Suspense>
-        : <App />}
+      {isVoicePage ? (
+        <Suspense fallback={null}><VoiceCollectPage /></Suspense>
+      ) : isSharePage ? (
+        <Suspense fallback={null}><SharedSessionPage /></Suspense>
+      ) : (
+        <App />
+      )}
     </ErrorBoundary>
   </StrictMode>,
 )
