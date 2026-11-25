@@ -82,6 +82,9 @@ def _sig(args) -> str:
 
 
 _QUERY_TOOLS = {"data_sql", "data_query", "data_clean", "kb_sql", "kb_query"}
+# arguments that pick a part of a file: calls that differ only in these are different reads
+_SUB_TARGET_KEYS = ("focus", "slide", "slides", "page", "pages", "sheet", "section", "range", "start", "end",
+                    "offset", "line", "lines", "from_line", "to_line")
 
 
 def call_signature(name: str, args) -> str:
@@ -93,11 +96,18 @@ def call_signature(name: str, args) -> str:
     file again is still caught.
     """
     target = ""
+    sub = ""
     if isinstance(args, dict):
         target = (args.get("path") or args.get("file") or args.get("filename")
                   or args.get("query") or args.get("q") or args.get("url") or "")
+        # a sub-target inside the file (a slide, page, sheet, line range...) is part of what the call asks for:
+        # inspecting slide 2 and then slide 9 of one deck is two calls, not a loop
+        sub = "|".join(f"{k}={json.dumps(args[k], sort_keys=True, default=str)}"
+                       for k in _SUB_TARGET_KEYS if k in args and args[k] not in (None, ""))
     if target and name in _QUERY_TOOLS:                 # the file is only the target: a new SQL / spec is a new call
         return f"{name}:{target}:{_sig(args)}"
+    if target and sub:
+        return f"{name}:{target}#{sub}"
     if target:
         return f"{name}:{target}"
     return f"{name}:{_sig(args)}"

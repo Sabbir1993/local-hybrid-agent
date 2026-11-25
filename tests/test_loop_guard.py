@@ -225,3 +225,28 @@ class DataSqlSameFileIsNotSameCall(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubTargetSignatureTests(unittest.TestCase):
+    """Reading different slides of one deck is different work; reading the same slide again is a loop."""
+
+    DECK = "City Bank Briefing.pptx"
+
+    def test_different_focus_is_a_different_call(self):
+        from core.agent_loop.loop_guard import call_signature
+        sigs = {call_signature("doc_inspect", {"file": self.DECK, "focus": f}) for f in ("s9", "s8", "s2")}
+        self.assertEqual(len(sigs), 3)
+
+    def test_same_focus_is_the_same_call(self):
+        from core.agent_loop.loop_guard import call_signature
+        a = call_signature("doc_inspect", {"file": self.DECK, "focus": "s9"})
+        b = call_signature("doc_inspect", {"file": self.DECK, "focus": "s9"})
+        self.assertEqual(a, b)
+
+    def test_plain_file_read_keeps_its_old_signature(self):
+        from core.agent_loop.loop_guard import call_signature
+        self.assertEqual(call_signature("read_file", {"path": "a.txt"}), "read_file:a.txt")
+
+
+if __name__ == "__main__":
+    unittest.main()

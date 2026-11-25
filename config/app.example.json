@@ -211,6 +211,7 @@
     "research_web": false,
     "force_doc_tool": false,
     "max_tool_rounds": 12,
+    "repeat_call_limit": 2,
     "max_web_calls": 16,
     "deep_max_tool_rounds": 40,
     "deep_max_web_calls": 60,

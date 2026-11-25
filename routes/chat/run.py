@@ -1849,7 +1849,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                         recent_tool_signatures.pop(0)
 
                     try:
-                        if repeat_count >= 2:
+                        # chat.repeat_call_limit: how many identical calls are allowed before the next one is refused
+                        if repeat_count >= max(1, int(chat_cfg.get("repeat_call_limit", 2) or 2)):
                             turn_limit = min(turn_limit, turn + 1)
                             what = f"`{target_cand}`" if target_cand else "the same arguments"
                             res_str = (f"error: `{t_name}` has been called repeatedly with {what}. "
