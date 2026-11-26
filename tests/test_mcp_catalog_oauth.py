@@ -42,7 +42,7 @@ def _fake_begin(port=40123, state="st-1"):
 
 
 class _McpApp(unittest.TestCase):
-    perms = {"chat.use", MANAGE_PERM}
+    perms = {"chat.use", "connectors.view", MANAGE_PERM}
 
     def setUp(self):
         app = FastAPI()
@@ -377,7 +377,7 @@ class ManualPasteTests(_McpApp):
         self.assertEqual(self.audit[-1]["action"], "mcp.oauth.paste")
 
     def test_permission_failures_are_403(self):
-        self.perms = {"chat.use"}
+        self.perms = {"chat.use", "connectors.view"}
         r = self.client.post("/mcp/servers/s/oauth/paste", json={"scope": "global", "pasted": "c"})
         self.assertEqual(r.status_code, 403)
         self.perms = {"some.other"}

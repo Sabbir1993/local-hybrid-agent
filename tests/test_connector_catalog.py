@@ -142,7 +142,8 @@ class ConnectorRouteTests(unittest.TestCase):
         app = FastAPI()
         app.include_router(cz.router)
         self.who = ("user", 7)
-        perms = {"user": {"chat.use"}, "admin": {"chat.use", "capabilities.install", "settings.orchestration.configure"}}
+        view = {"connectors.view", "skills.view", "plugins.view"}      # an ordinary user holds these since the Customize tabs got view keys
+        perms = {"user": {"chat.use"} | view, "admin": {"chat.use", "capabilities.install", "settings.orchestration.configure"} | view}
         app.dependency_overrides[deps.get_current_user] = lambda: _principal(perms[self.who[0]], self.who[1])
         self.client = TestClient(app)
 

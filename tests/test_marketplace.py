@@ -74,7 +74,7 @@ class MarketplaceTests(unittest.TestCase):
             p.start()
         app = FastAPI()
         app.include_router(cz.router)
-        self.perms = {"capabilities.install"}
+        self.perms = {"capabilities.install", "skills.view", "plugins.view", "connectors.view"}
         app.dependency_overrides[deps.get_current_user] = lambda: _principal(self.perms)
         self.client = TestClient(app)
 

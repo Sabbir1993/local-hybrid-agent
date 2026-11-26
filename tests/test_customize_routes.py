@@ -56,7 +56,8 @@ class CustomizeRouteTests(unittest.TestCase):
             p.start()
         app = FastAPI()
         app.include_router(cz.router)
-        self.perms = {"capabilities.install"}
+        # install rights plus the view keys an ordinary user holds (browsing a tab needs <kind>.view)
+        self.perms = {"capabilities.install", "skills.view", "plugins.view", "connectors.view"}
         app.dependency_overrides[deps.get_current_user] = lambda: _principal(self.perms)
         self.client = TestClient(app)
 
@@ -82,12 +83,16 @@ class CustomizeRouteTests(unittest.TestCase):
         self.assertEqual(self.client.delete("/customize/skills/demo").status_code, 200)
         self.assertFalse((self.installed / "demo").exists())
 
-    def test_modified_skill_is_not_removed(self):
+    def test_modified_skill_is_removed_only_after_confirmation(self):
         self.client.post("/customize/skills/demo/install")
         (self.installed / "demo" / "SKILL.md").write_text("edited", encoding="utf-8")
         self.assertTrue(self._skill()["modified"])
-        self.assertEqual(self.client.delete("/customize/skills/demo").status_code, 400)
+        r = self.client.delete("/customize/skills/demo")                   # no confirmation: nothing is deleted
+        self.assertEqual(r.status_code, 409)
+        self.assertTrue(r.json()["needs_force"])
         self.assertTrue((self.installed / "demo").exists())
+        self.assertEqual(self.client.delete("/customize/skills/demo?force=true").status_code, 200)   # the person confirmed
+        self.assertFalse((self.installed / "demo").exists())
 
     def test_invalid_names_rejected(self):
         self.assertEqual(self.client.post("/customize/skills/Bad.Name/install").status_code, 400)
@@ -95,8 +100,10 @@ class CustomizeRouteTests(unittest.TestCase):
         self.assertEqual(self.client.post("/customize/skills/nope/install").status_code, 400)
         self.assertEqual(self.client.get("/customize/widgets").status_code, 404)
 
-    def test_install_needs_permission_browse_does_not(self):
+    def test_install_needs_permission_browse_needs_only_the_view_key(self):
         self.perms.clear()
+        self.assertEqual(self.client.get("/customize/skills").status_code, 403)       # no view key: no catalog either
+        self.perms.add("skills.view")
         self.assertEqual(self.client.get("/customize/skills").status_code, 200)
         self.assertEqual(self.client.post("/customize/skills/demo/install").status_code, 403)
         self.assertFalse((self.installed / "demo").exists())
