@@ -175,6 +175,11 @@ def _borders(el_pr, spec: dict, tag: str):
     _put(el_pr, b)
 
 
+# Complex-script face for Bengali runs: ships with Windows 8+ / Office (Kalpurush does not, so Word
+# would substitute); same face the PPTX and PDF paths use.
+_BN_CS_FACE = "Nirmala UI"
+
+
 def _setup(doc, title: str, bengali: bool):
     from docx.enum.style import WD_STYLE_TYPE
     from docx.oxml.ns import qn
@@ -194,7 +199,7 @@ def _setup(doc, title: str, bengali: bool):
         rpr.append(fonts)
     for a in ("w:ascii", "w:hAnsi", "w:eastAsia"):
         fonts.set(qn(a), "Calibri")
-    fonts.set(qn("w:cs"), "Kalpurush" if bengali else "Calibri")
+    fonts.set(qn("w:cs"), _BN_CS_FACE if bengali else "Calibri")
     n.font.color.rgb = _hex("1E293B")
     n.paragraph_format.space_after = Pt(6)
     n.paragraph_format.line_spacing = 1.15
@@ -212,7 +217,7 @@ def _setup(doc, title: str, bengali: bool):
             for a in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
                 if fr.get(qn(a)) is not None:
                     del fr.attrib[qn(a)]
-            fr.set(qn("w:cs"), "Kalpurush" if bengali else "Calibri")
+            fr.set(qn("w:cs"), _BN_CS_FACE if bengali else "Calibri")
     h1 = st["Heading 2"].element.get_or_add_pPr()
     _borders(h1, {"bottom": (6, _RULE)}, "w:pBdr")
     ttl = st["Title"].element.get_or_add_pPr()

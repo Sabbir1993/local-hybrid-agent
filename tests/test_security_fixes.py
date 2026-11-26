@@ -77,10 +77,11 @@ class RbacEscalationTests(_TempAuthDb):
         self.assertEqual(r.status_code, 403)
 
     def test_can_assign_role_within_own_permissions(self):
-        # memory.use is granted to every chat.use role on migration
-        # (auth_db.common._GRANT_WITH_CHAT_USE), so a real manager holds it too.
+        # every key in auth_db.common._GRANT_WITH_CHAT_USE (memory.use and the *.view keys) is
+        # granted to every chat.use role on migration, so a real manager holds all of them too.
         # The RBAC check must allow granting a role whose permissions the caller has.
-        self.caller.permission_keys.add("memory.use")
+        from core.auth_db.common import _GRANT_WITH_CHAT_USE
+        self.caller.permission_keys.update(_GRANT_WITH_CHAT_USE)
         r = self.client.patch(f"/admin/users/{self.victim}", json={"roles": ["user"]})
         self.assertEqual(r.status_code, 200, r.text)
 

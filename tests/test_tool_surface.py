@@ -162,9 +162,15 @@ class TestRealRegistrySaving(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        _register_everything()
-        from core.agent_loop import all_tools
-        cls.tools = all_tools()
+        # media tools are only visible when a local model lane is reachable (job_ready); this test is
+        # about tool-surface filtering, not about which models this machine has mounted, so pretend
+        # every media job is ready while the registry is built and listed.
+        from unittest import mock
+        from core import media_tools
+        with mock.patch.object(media_tools, "job_ready", return_value=True):
+            _register_everything()
+            from core.agent_loop import all_tools
+            cls.tools = all_tools()
 
     @staticmethod
     def _schema_tokens(tools):

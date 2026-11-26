@@ -687,6 +687,12 @@ class EachRunStartsClean(unittest.TestCase):
             self.assertFalse(eval_agent.reset_eval_tmp(self.ws))
             self.assertTrue((outside / "precious.txt").exists())
         finally:
+            # drop the link while its target still exists: on Windows a dangling directory
+            # symlink can no longer be unlinked, which made tearDown's rmtree fail
+            try:
+                os.unlink(self.ws / "eval_tmp")
+            except OSError:
+                pass
             shutil.rmtree(outside, ignore_errors=True)
 
     def test_the_suite_cleans_before_every_repeat_of_every_task(self):

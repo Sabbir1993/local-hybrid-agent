@@ -292,7 +292,7 @@ class SourceIndex:
         return f["status"] if f else None
 
 
-def _repo_stamp(root) -> dict:
+def _repo_stamp(root, prev=None) -> dict:
     """{rel_posix: (mtime_ns, size)} for every parseable or skipped-suffix file.
 
     The stamp IS the invalidation key: additions, deletions, edits, and
@@ -304,6 +304,7 @@ def _repo_stamp(root) -> dict:
     """
     stamp = {}
     now_ns = time.time_ns()
+    prev = prev or {}
     stack = [os.fspath(root)]
     while stack:
         try:
@@ -321,7 +322,14 @@ def _repo_stamp(root) -> dict:
                         st = e.stat()
                         rel = os.path.relpath(e.path, root)
                         key = rel.replace(os.sep, "/")
-                        if now_ns - st.st_mtime_ns < _TICK_NS:
+                        old = prev.get(key)
+                        # A file hashed while fresh stays hashed on later scans: if it
+                        # flipped to the plain (mtime, size) form once it aged past the
+                        # tick, the stamp would differ from the cached one and an
+                        # unchanged repo would be needlessly re-parsed.
+                        if (now_ns - st.st_mtime_ns < _TICK_NS
+                                or (old is not None and len(old) == 3
+                                    and old[:2] == (st.st_mtime_ns, st.st_size))):
                             # too fresh to trust mtime: a same-size rewrite in the
                             # same clock tick is invisible to (mtime_ns, size)
                             try:
@@ -471,10 +479,10 @@ def index_repo(root) -> dict:
     """
     root = Path(root)
     key = str(root)
-    stamp = _repo_stamp(root)
+    hit = _CACHE.get(key)
+    stamp = _repo_stamp(root, hit["stamp"] if hit else None)
 
     # Layer 1: hot in-process dict
-    hit = _CACHE.get(key)
     if hit is not None and hit["stamp"] == stamp:
         return hit["data"]
 

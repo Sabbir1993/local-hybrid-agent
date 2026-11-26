@@ -31,8 +31,11 @@ class GitignoreCoversLocalOnlyState(unittest.TestCase):
             self.assertIn(entry, ignore, f"{entry} must be in the committed .gitignore")
 
     def test_git_actually_ignores_them_now(self):
+        # trailing slash: the rules are directory patterns ("/.kilo/"), which git only applies to a
+        # path that exists as a directory or is spelled as one - bare names fail on a machine
+        # that simply has no such folder
         for path in (".kilo", "db_backups"):
-            rc = subprocess.run(["git", "check-ignore", "-q", path], cwd=ROOT).returncode
+            rc = subprocess.run(["git", "check-ignore", "-q", path + "/"], cwd=ROOT).returncode
             self.assertEqual(rc, 0, f"{path} is not ignored")
 
     def test_installed_copies_are_not_committed(self):

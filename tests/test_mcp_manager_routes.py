@@ -71,7 +71,7 @@ class RouteTests(unittest.TestCase):
             p.start()
         app = FastAPI()
         app.include_router(mm.router)
-        self.perms = {"settings.orchestration.configure", "chat.use"}
+        self.perms = {"settings.orchestration.configure", "chat.use", "connectors.view"}
         self.uid = 1
         app.dependency_overrides[deps.get_current_user] = lambda: _principal(self.perms, self.uid)
         self.client = TestClient(app)
@@ -167,7 +167,7 @@ class RouteTests(unittest.TestCase):
     # ---------------- personal ("just for me") servers ----------------
 
     def _as_user(self, uid=7):
-        self.perms, self.uid = {"chat.use"}, uid
+        self.perms, self.uid = {"chat.use", "connectors.view"}, uid
 
     def test_user_cannot_touch_global(self):
         self._as_user()

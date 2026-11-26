@@ -52,7 +52,8 @@ class ParallelSubagentExecutionTests(unittest.IsolatedAsyncioTestCase):
             t_start = time.perf_counter()
             await asyncio.sleep(0.08)
             call_times.append((task, t_start, time.perf_counter()))
-            return f"Completed audit for {task}"
+            # real run_subagent output carries a status header; the parallel header counts on it
+            return f"[sub-agent · role={role} · 1 msgs · lane=test · status=success]\nCompleted audit for {task}"
 
         with mock.patch("core.subagent.runner.run_subagent", side_effect=_mock_run):
             specs = [
@@ -60,20 +61,17 @@ class ParallelSubagentExecutionTests(unittest.IsolatedAsyncioTestCase):
                 {"task": "Audit local model runtime", "role": "explorer"},
                 {"task": "Audit verifier module", "role": "explorer"},
             ]
-            t0 = time.perf_counter()
             res = await run_parallel_subagents(specs, max_concurrency=4)
-            elapsed = time.perf_counter() - t0
 
-            # 3 tasks * 0.08s serially = ~0.24s. In parallel it should take ~0.08s - 0.15s.
-            self.assertLess(elapsed, 0.22, f"Expected parallel execution, took {elapsed:.2f}s")
+            # Property under test is overlap, not wall-clock (which flakes on a loaded
+            # machine): run serially, the last task would start after the first one ended.
             self.assertEqual(len(call_times), 3)
-
-            # Check that tasks overlapped in execution
             starts = [t[1] for t in call_times]
-            self.assertLess(max(starts) - min(starts), 0.05, "All subagents should have started at roughly the same time")
+            ends = [t[2] for t in call_times]
+            self.assertLess(max(starts), min(ends), "sub-agents ran serially instead of concurrently")
 
             # Verify combined result contains each subagent output
-            self.assertIn("[parallel sub-agents · 3 spawned concurrently]", res)
+            self.assertIn("[parallel sub-agents · 3 spawned concurrently · all 3 succeeded]", res)
             self.assertIn("Audit agent loop core", res)
             self.assertIn("Audit local model runtime", res)
             self.assertIn("Audit verifier module", res)

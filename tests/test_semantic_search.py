@@ -19,6 +19,14 @@ from core.memory import store as store_mod
 from core.memory import search as search_mod
 
 
+try:
+    import sqlite_vec  # noqa: F401  (optional dependency, see requirements.txt)
+    _HAS_VEC_PKG = hasattr(sqlite3.connect(":memory:"), "enable_load_extension")
+except Exception:
+    _HAS_VEC_PKG = False
+needs_vec = unittest.skipUnless(_HAS_VEC_PKG, "sqlite-vec package is not installed (optional; memory falls back to numpy)")
+
+
 class SemanticSearchTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -53,7 +61,10 @@ class SemanticSearchTests(unittest.TestCase):
 
     def test_extension_probes(self):
         self.assertTrue(has_fts5(), "FTS5 should be supported and active")
-        # In python environment with sqlite-vec installed, has_sqlite_vec should be True
+
+    @needs_vec
+    def test_sqlite_vec_probe(self):
+        # sqlite-vec installed -> it must actually have loaded into the memory db
         self.assertTrue(has_sqlite_vec(), "sqlite-vec should be loaded")
 
     def test_fts5_indexing_and_search(self):
@@ -72,6 +83,7 @@ class SemanticSearchTests(unittest.TestCase):
         self.assertEqual(hits[0]["path"], "kb:1")
         self.assertIn("teleportation", hits[0]["text"].lower())
 
+    @needs_vec
     def test_sqlite_vec_cosine_search(self):
         # Insert vectors (4-dim for test)
         v1 = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32).tobytes()

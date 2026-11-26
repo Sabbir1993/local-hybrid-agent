@@ -66,7 +66,7 @@ class PluginRouteTests(unittest.TestCase):
             p.start()
         app = FastAPI()
         app.include_router(rp.router)
-        self.perms = {"settings.orchestration.configure"}
+        self.perms = {"settings.orchestration.configure", "plugins.view"}
         app.dependency_overrides[deps.get_current_user] = lambda: _principal(self.perms)
         self.client = TestClient(app)
 
@@ -140,11 +140,14 @@ class PluginRouteTests(unittest.TestCase):
         self.assertEqual(self.client.post("/plugins/demo/install").status_code, 400)
 
     def test_mutations_require_permission(self):
-        self.perms = set()
+        self.perms = {"plugins.view"}      # may look, may not change anything
         self.assertEqual(self.client.post("/plugins/demo/install").status_code, 403)
         self.assertEqual(self.client.post("/plugins/reload").status_code, 403)
         self.assertFalse((self.installed / "demo").exists())
+        self.assertEqual(self.client.delete("/plugins/demo").status_code, 403)
         self.assertEqual(self.client.get("/plugins/catalog").status_code, 200)
+        self.perms = set()
+        self.assertEqual(self.client.get("/plugins/catalog").status_code, 403)   # viewing needs plugins.view
 
 
 if __name__ == "__main__":
