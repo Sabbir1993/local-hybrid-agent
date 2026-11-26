@@ -88,3 +88,6 @@ config/web_cache.sqlite*
 voice-corpus/
 
 .image_cache/
+
+# Per-user shared space (common/projects.db, users.db, user_N/ files): runtime data, never in git
+/common/
