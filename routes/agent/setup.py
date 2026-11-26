@@ -45,6 +45,7 @@ from core.small_model import APP_CONFIG, classifier, small_models
 from core import agent_memory
 from core.state import state
 from core import prompt_scope
+from core import prompt_trim
 from core import tool_surface
 from .. import common
 from .constants import AGENT_MAX_STEPS, PLAN_MODE_PROMPT
@@ -89,6 +90,7 @@ class RunContext:
     surface_q: str = ""
     rpol: dict = field(default_factory=dict)
     q_category: str = "other"
+    trim_greeting: bool = False      # a plain greeting got the stub system prompt (core/prompt_trim.py); routing must agree
     clf_profile: Optional[dict] = None
     kb_ids: set = field(default_factory=set)
     kb_blocked_reason: str = ""
@@ -390,8 +392,12 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             ctx.msgs.append({"role": "user", "content": f"[Attached Files]\n{file_context}"})
 
     ctx.ws_path = str(active_workspace())
-    ctx.sys_prompt = AGENT_SYSTEM_PROMPT.format(workspace=ctx.ws_path)
-    if req.permission_mode == "bypass":
+    ctx.trim_greeting = prompt_trim.greeting_turn(
+        ctx.msgs, router_policy.rcfg(), plan=bool(req.plan), custom_agent=ctx.custom_agent, voice=bool(req.voice),
+        request_system=req.system_prompt or "")
+    ctx.sys_prompt = (prompt_trim.GREETING_PROMPT if ctx.trim_greeting
+                      else AGENT_SYSTEM_PROMPT.format(workspace=ctx.ws_path))
+    if req.permission_mode == "bypass" and not ctx.trim_greeting:
         # the prompt says every run_python call needs approval; in bypass that is false and a small
         # model then avoids running anything (it burned a whole SWE-bench run reasoning around it)
         ctx.sys_prompt = ctx.sys_prompt.replace(
@@ -448,7 +454,7 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
     # masked by the loader; admin output-guard rules applied on top because the
     # text can reach a cloud lane
     try:
-        _pi = await load_project_instructions()
+        _pi = None if ctx.trim_greeting else await load_project_instructions()
         if _pi:
             _pi_text, _ = output_guard.redact_full(_pi[1], user, ctx.any_cloud)
             ctx.sys_prompt += project_prompt_block((_pi[0], _pi_text))
@@ -582,13 +588,14 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
         open_hint = ("\nOPENING A SITE FOR THE USER ('open youtube', 'open X in chrome'): call open_in_my_browser with the "
                      "https URL. web_fetch only downloads text for you - it opens nothing, so never say you opened a "
                      "site unless open_in_my_browser succeeded.")
-    for frag in (skills_prompt_fragment(), agent_library_prompt_fragment(), custom_agents_prompt_fragment(),
-                 plugins_prompt_fragment(), test_hint, open_hint):
+    for frag in (() if ctx.trim_greeting else
+                 (skills_prompt_fragment(), agent_library_prompt_fragment(), custom_agents_prompt_fragment(),
+                  plugins_prompt_fragment(), test_hint, open_hint)):
         if frag:
             ctx.sys_prompt += "\n" + frag
             sys_labels.append("fragments")
-    # executor lanes get the tool-call format few-shot (aligned with the GBNF grammar)
-    if ctx.cloud_exec or ctx.ex_inst.available:
+    # executor lanes get the tool-call format few-shot (aligned with the GBNF grammar); a greeting calls no tool
+    if not ctx.trim_greeting and (ctx.cloud_exec or ctx.ex_inst.available):
         ctx.sys_prompt += envelope_examples()
         sys_labels.append("envelope")
     if req.plan:
@@ -696,6 +703,8 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
 
     ctx.rpol = router_policy.rcfg()
     ctx.q_category = router_policy.classify_query(ctx.last_query, ctx.rpol, msgs=ctx.msgs)
+    if ctx.trim_greeting and ctx.q_category != "greeting":
+        ctx.q_category = "greeting"       # the stub prompt has no tool rules: route the turn as the greeting it was judged to be
     # Laya request profile (core/small_model/classifier.py): logged whenever the classifier is on,
     # and it refines the rule-based category only in active mode, only when confident, and never
     # over a greeting. It runs on a worker thread with a hard timeout, so a slow model just
