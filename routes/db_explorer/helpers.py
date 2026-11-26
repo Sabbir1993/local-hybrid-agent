@@ -23,6 +23,18 @@ from .constants import (
 )
 
 
+# System databases a read-only (database.view) caller may open: usage statistics only. auth.db holds credentials and MFA seeds,
+# projects.db every user's chat history, memory.db their personal notes: those stay behind database.manage.
+VIEW_ONLY_SYSTEM_DBS = {"usage"}
+
+
+def can_open_db(user, db_id: str) -> bool:
+    from core.auth import user_has_permission
+    if user_has_permission(user, "database.manage"):
+        return True
+    return db_id not in SYSTEM_DBS or db_id in VIEW_ONLY_SYSTEM_DBS
+
+
 def _sanitize_cell_value(val: Any) -> Any:
     """Format cell value for safe JSON serialization."""
     if val is None:

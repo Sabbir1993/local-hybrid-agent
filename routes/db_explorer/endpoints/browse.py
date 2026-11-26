@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import Depends, HTTPException, Query
 from core.audit import audit_log
 from core.auth import Principal
-from core.deps import require_verified
+from core.deps import require_verified_any
 from ..constants import SYSTEM_DBS
 from ..helpers import (
     _connect,
@@ -11,17 +11,28 @@ from ..helpers import (
     _get_table_count,
     _resolve_db,
     _sanitize_cell_value,
+    can_open_db,
 )
 
 from .base import router
 
 
+def _require_db_scope(user: Principal, db_id: str) -> None:
+    """database.view reaches the usage database and the caller's own workspace databases only; auth, chat history and memory
+    need database.manage."""
+    if not can_open_db(user, db_id):
+        audit_log(user, action="database.read", resource=db_id, permission_key="database.manage", result="deny")
+        raise HTTPException(status_code=403, detail="missing permission: database.manage (this database is not open to database.view)")
+
+
 @router.get("/list")
-async def list_databases(user: Principal = Depends(require_verified("database.manage"))):
+async def list_databases(user: Principal = Depends(require_verified_any("database.manage", "database.view"))):
     """List all available system and workspace SQLite databases."""
     out = []
     # 1. System DBs
     for d in SYSTEM_DBS.values():
+        if not can_open_db(user, d["id"]):
+            continue
         p: Path = d["path"]
         size = p.stat().st_size if p.exists() else 0
         t_count = _get_table_count(p) if p.exists() else 0
@@ -57,8 +68,9 @@ async def list_databases(user: Principal = Depends(require_verified("database.ma
 
 
 @router.get("/{db_id}/schema")
-async def get_schema(db_id: str, user: Principal = Depends(require_verified("database.manage"))):
+async def get_schema(db_id: str, user: Principal = Depends(require_verified_any("database.manage", "database.view"))):
     """Retrieve schema, table list, column types, and DDL for the specified database."""
+    _require_db_scope(user, db_id)
     path = _resolve_db(db_id, user.id)
     tables = []
 
@@ -128,9 +140,10 @@ async def get_table_data(
     table_name: str,
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    user: Principal = Depends(require_verified("database.manage")),
+    user: Principal = Depends(require_verified_any("database.manage", "database.view")),
 ):
     """Quick paginated view of a specific table's contents."""
+    _require_db_scope(user, db_id)
     path = _resolve_db(db_id, user.id)
     audit_log(user, action="database.read", resource=f"{db_id}:{table_name}", permission_key="database.manage",
               detail={"limit": limit, "offset": offset})

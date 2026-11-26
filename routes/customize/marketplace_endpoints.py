@@ -6,7 +6,7 @@ from core.net_guard import BlockedURLError
 from core import plugins as plugins_core
 from core.audit import audit_log
 from core.auth import Principal
-from core.deps import get_current_user
+from core.deps import get_current_user, require_permission
 from routes.plugins import _set_disabled as _set_plugin_disabled
 
 from .base import (
@@ -30,7 +30,7 @@ from .marketplace import (
 
 @router.get("/plugins/registry")
 async def plugin_registry(q: Optional[str] = None,
-                          user: Principal = Depends(get_current_user)):
+                          user: Principal = Depends(require_permission("plugins.view"))):
     # No per-request URL override: users can't point the server at a registry of
     # their choosing; only the admin-set config value (or the local file) is used.
     target = _marketplace_url()
@@ -74,7 +74,7 @@ async def plugin_registry(q: Optional[str] = None,
 
 @router.post("/plugins/inspect-remote")
 async def inspect_remote_plugin(req: RemoteInspectReq,
-                                user: Principal = Depends(get_current_user)):
+                                user: Principal = Depends(require_permission("plugins.view"))):
     try:
         data = await _fetch_manifest_and_code(req.manifest_url, req.code_url)
     except ValueError as e:

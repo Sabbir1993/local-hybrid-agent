@@ -13,7 +13,8 @@ def _skills_items(uid: Optional[int] = None) -> list:
     for name in sorted(set(catalog) | set(installed)):
         cat, inst = catalog.get(name), installed.get(name)
         src = cat or inst
-        modified = bool(inst) and skills_core.is_modified(name)
+        differs = bool(inst) and skills_core.is_modified(name)            # differs from the catalog's current copy
+        edited = differs and (inst or {}).get("trust") != "reviewed"       # ... and not simply an older catalog install
         items.append({
             "id": name,
             "title": (cat or {}).get("title") or (inst or {}).get("title") or src["name"],
@@ -24,8 +25,9 @@ def _skills_items(uid: Optional[int] = None) -> list:
             "in_catalog": cat is not None,
             "installed": inst is not None,
             "trust": (inst or {}).get("trust") or None,
-            "modified": bool(cat) and modified,
-            "can_uninstall": bool(inst) and bool(cat) and not modified,
+            "modified": bool(cat) and edited,
+            "update_available": bool(cat) and differs and not edited,       # the catalog moved on; remove and install to update
+            "can_uninstall": bool(inst),                                    # an edited or hand-written one asks for confirmation
             "triggers": (cat or inst)["triggers"][:10],
         })
     return items
@@ -47,7 +49,7 @@ def _plugins_items(uid: Optional[int] = None) -> list:
             "in_catalog": cat is not None,
             "installed": inst is not None,
             "modified": bool(inst and inst["modified"]),
-            "can_uninstall": bool(inst and inst["from_catalog"] and not inst["modified"]),
+            "can_uninstall": bool(inst),                                    # an edited or hand-written one asks for confirmation
             "tools": (inst["tools"] if inst and inst["tools"] else (cat or {}).get("tools", [])),
             "loaded": bool(inst and inst["loaded"]),
             "enabled": bool(inst and inst["enabled"]),

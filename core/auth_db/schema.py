@@ -6,6 +6,7 @@ from .common import (
     _BUILTIN_ROLES,
     _DEFAULT_USER_PERMISSIONS,
     _GRANT_WITH_CHAT_USE,
+    _GRANT_WITH_PERM,
     _NOT_AUTO_GRANTED,
     _RETIRED_PERMISSIONS,
     PERMISSIONS,
@@ -277,6 +278,15 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
             "SELECT rp.role_id, (SELECT id FROM permissions WHERE key = ?), ? FROM role_permissions rp "
             "JOIN permissions p ON p.id = rp.permission_id WHERE p.key = 'chat.use'",
             (key, now),
+        )
+    for key, older in _GRANT_WITH_PERM.items():       # a narrower key goes once to every role that held the broader one
+        if key in known_keys:
+            continue
+        conn.execute(
+            "INSERT OR IGNORE INTO role_permissions (role_id, permission_id, granted_at) "
+            "SELECT rp.role_id, (SELECT id FROM permissions WHERE key = ?), ? FROM role_permissions rp "
+            "JOIN permissions p ON p.id = rp.permission_id WHERE p.key = ?",
+            (key, now, older),
         )
     conn.commit()
 

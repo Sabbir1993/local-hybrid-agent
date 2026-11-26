@@ -326,13 +326,21 @@ def trust_of(name: str) -> str:
     return "modified"
 
 
-def uninstall(name: str) -> None:
-    """Remove .agents/skills/<name>. Only unmodified catalog skills can be removed here;
-    hand-written skills stay on disk."""
+class NeedsForce(ValueError):
+    """Removal refused until the caller confirms: the folder holds work that is not in the catalog."""
+    needs_force = True
+
+
+def uninstall(name: str, force: bool = False) -> None:
+    """Remove .agents/skills/<name>.
+
+    A skill that is exactly what the catalog installed can always go, even if the catalog has moved on since (an update to
+    the catalog must not lock the old copy in). A hand-written or locally edited one is removed only with force=True, after
+    the person confirmed: its files are deleted for good."""
     if not is_installed(name):
         raise ValueError(f"'{name}' is not installed")
-    if is_modified(name):
-        raise ValueError(f"'{name}' is hand-written or locally modified — remove .agents/skills/{name} manually")
+    if not force and is_modified(name) and trust_of(name) != "reviewed":
+        raise NeedsForce(f"'{name}' is hand-written or has local changes. Removing it deletes .agents/skills/{name} for good")
     shutil.rmtree(SKILLS_DIR / name)
 
 

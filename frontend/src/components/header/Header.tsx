@@ -8,6 +8,7 @@ export const Header: React.FC = () => {
     activeModal,
     setActiveModal,
     hasPerm,
+    hasAnyPerm,
   } = useAppStore();
 
   const handleToolClick = (modal: 'customize' | 'report' | 'audit' | 'db' | 'monitor') => {
@@ -33,9 +34,11 @@ export const Header: React.FC = () => {
 
       {/* Dev & System Tools Cluster (Customize, Report, Audit, DB, Monitor) */}
       <div className="header-tool-cluster" id="header-dev-cluster">
+        {hasAnyPerm('skills.view', 'connectors.view', 'plugins.view', 'agents.view') && (
         <button
           id="btn-customize"
           className={`btn ghost icon-btn icon-only ${activeModal === 'customize' ? 'active' : ''}`}
+          data-perm-any="skills.view connectors.view plugins.view agents.view"
           title="Customize: browse and install skills, connectors and plugins"
           aria-label="Customize"
           onClick={() => handleToolClick('customize')}
@@ -47,6 +50,7 @@ export const Header: React.FC = () => {
             <path d="M17.5 14v7M14 17.5h7" />
           </svg>
         </button>
+        )}
 
         {hasPerm('usage.report.view') && (
         <button
@@ -83,11 +87,11 @@ export const Header: React.FC = () => {
         </button>
         )}
 
-        {hasPerm('database.manage') && (
+        {hasAnyPerm('database.manage', 'database.view') && (
         <button
           id="btn-db"
           className={`btn ghost icon-btn icon-only ${activeModal === 'db' ? 'active' : ''}`}
-          data-perm="database.manage"
+          data-perm-any="database.manage database.view"
           title="Database Explorer & SQL Query Console: inspect tables, schema, and execute SQL"
           aria-label="Database"
           onClick={() => handleToolClick('db')}

@@ -83,13 +83,18 @@ def install_from_catalog(name: str) -> None:
     shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 
 
-def uninstall(name: str) -> None:
-    """Remove plugins/<name>. Only catalog plugins with no local edits can be removed
-    here (they can always be reinstalled); hand-written plugins stay on disk."""
+class NeedsForce(ValueError):
+    """Removal refused until the caller confirms: the folder holds work that is not in the catalog."""
+    needs_force = True
+
+
+def uninstall(name: str, force: bool = False) -> None:
+    """Remove plugins/<name>. A catalog plugin with no local edits goes without asking (it can be reinstalled); a hand-written
+    or edited one only with force=True, after the person confirmed, because its code is deleted for good."""
     if not is_installed(name):
         raise ValueError(f"'{name}' is not installed")
-    if is_modified(name):
-        raise ValueError(f"'{name}' is hand-written or locally modified — remove plugins/{name} manually")
+    if not force and is_modified(name):
+        raise NeedsForce(f"'{name}' is hand-written or has local changes. Removing it deletes plugins/{name} for good")
     unload_plugin(name)
     shutil.rmtree(_get_plugins_dir() / name)
 

@@ -124,7 +124,10 @@ def remove_connector(item_id: str, owner: Optional[int]) -> None:
 
 
 @router.delete("/{kind}/{item_id}")
-async def uninstall(kind: str, item_id: str, request: Request, user: Principal = Depends(get_current_user)):
+async def uninstall(kind: str, item_id: str, request: Request, force: bool = False,
+                    user: Principal = Depends(get_current_user)):
+    """Remove an installed item. A skill or plugin with local changes (or written by hand) answers 409 with needs_force; the page
+    asks the person and calls again with ?force=true. The caller needs capabilities.install either way."""
     perm = _PERM
     try:
         if kind == "connectors":
@@ -146,18 +149,21 @@ async def uninstall(kind: str, item_id: str, request: Request, user: Principal =
             if kind == "skills":
                 if not skills_core.valid_name(item_id):
                     return _err("invalid skill name")
-                skills_core.uninstall(item_id)
+                skills_core.uninstall(item_id, force=force)
             elif kind == "plugins":
                 if not plugins_core.valid_name(item_id):
                     return _err("invalid plugin name")
-                plugins_core.uninstall(item_id)
+                plugins_core.uninstall(item_id, force=force)
                 if item_id in plugins_core.disabled_names():
                     _set_plugin_disabled(item_id, False)
             else:
                 return _err(f"unknown kind '{kind}'", 404)
     except ValueError as e:
+        if getattr(e, "needs_force", False):
+            return JSONResponse({"error": str(e), "needs_force": True}, status_code=409)
         return _err(str(e))
     except OSError as e:
         return _err(f"uninstall failed: {e}", 500)
-    audit_log(user, action=f"customize.{kind}.uninstall", resource=item_id, permission_key=perm)
+    audit_log(user, action=f"customize.{kind}.uninstall", resource=item_id, permission_key=perm,
+              detail={"force": True} if force else None)
     return {"ok": True}

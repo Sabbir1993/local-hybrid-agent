@@ -28,6 +28,7 @@ interface CatalogItem {
   has_client?: boolean;
   status?: string;
   modified?: boolean;
+  update_available?: boolean;
   error?: string;
   enabled?: boolean;
   triggers?: string[];
@@ -117,16 +118,24 @@ const catLabel = (cat?: string) =>
   (cat || 'general').replace(/[-_]/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
 
 export const CustomizeModal: React.FC = () => {
-  const { activeModal, setActiveModal, currentUser, customizeTab, openAgentModal, agentsVersion } = useAppStore();
+  const { activeModal, setActiveModal, currentUser, customizeTab, openAgentModal, agentsVersion, hasPerm } = useAppStore();
   const isOpen = activeModal === 'customize';
 
-  const [kind, setKind] = useState<Kind>(customizeTab || 'skills');
+  // One view permission per tab; a tab the person may not see is not offered (the server refuses its catalog anyway).
+  const KIND_PERM: Record<Kind, string> = { skills: 'skills.view', connectors: 'connectors.view', plugins: 'plugins.view', agents: 'agents.view' };
+  const allowedKinds = (['skills', 'connectors', 'plugins', 'agents'] as const).filter((k) => hasPerm(KIND_PERM[k]));
+  const pickKind = (want?: Kind): Kind => (want && allowedKinds.includes(want) ? want : allowedKinds[0] || 'skills');
+
+  const [kind, setKind] = useState<Kind>(() => pickKind(customizeTab));
 
   useEffect(() => {
     if (isOpen && customizeTab) {
-      setKind(customizeTab);
+      setKind(pickKind(customizeTab));
     }
   }, [isOpen, customizeTab]);
+  useEffect(() => {
+    if (allowedKinds.length && !allowedKinds.includes(kind)) setKind(allowedKinds[0]);
+  }, [kind, allowedKinds.join(',')]);
   const [view, setView] = useState<View>('discover');
   const [search, setSearch] = useState<string>('');
   const [category, setCategory] = useState<string | null>(null);
@@ -327,9 +336,16 @@ export const CustomizeModal: React.FC = () => {
     if (!confirm(`Are you sure you want to remove ${it.title}?`)) return;
     setActionLoading(it.id);
     try {
-      const resp = await apiFetch(`/customize/${kind}/${encodeURIComponent(it.id)}`, {
-        method: 'DELETE',
-      });
+      const url = `/customize/${kind}/${encodeURIComponent(it.id)}`;
+      let resp = await apiFetch(url, { method: 'DELETE' });
+      if (resp.status === 409) {
+        // hand-written or locally edited: removing deletes its files for good, so the person confirms once more
+        const warn = await resp.json().catch(() => ({} as any));
+        if (!warn.needs_force || !confirm(`${warn.error || 'This has local changes.'}
+
+Remove it anyway?`)) return;
+        resp = await apiFetch(`${url}?force=true`, { method: 'DELETE' });
+      }
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
         alert(err.detail || err.error || 'Remove failed');
@@ -491,6 +507,12 @@ export const CustomizeModal: React.FC = () => {
           modified
         </span>
       );
+    } else if (it.update_available) {
+      chips.push(
+        <span key="upd" className="cz-chip mid" title="The catalog has a newer version. Remove it and install again to update.">
+          update available
+        </span>
+      );
     }
 
     if (it.installed && (!kind || kind !== 'connectors')) {
@@ -572,7 +594,7 @@ export const CustomizeModal: React.FC = () => {
         {/* Toolbar Bar */}
         <div className="cz-bar">
           <div className="cz-tabs" role="tablist">
-            {(['skills', 'connectors', 'plugins', 'agents'] as const).map((k) => (
+            {allowedKinds.map((k) => (
               <button
                 key={k}
                 className={`cz-tab ${kind === k ? 'on' : ''}`}

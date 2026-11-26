@@ -22,6 +22,11 @@ PERMISSIONS = {
     "memory.use": "Use personal memory (Settings -> Capabilities -> My memory); chat and the agent read and save it",
     "settings.input_guard": "Configure the input sanitizer (cloud-block patterns, prohibited prompt types, role restrictions)",
     "database.manage": "Inspect system & workspace SQLite databases and execute SQL queries",
+    "database.view": "Browse (read only) the usage database and the person's own workspace databases; no SQL console",
+    "skills.view": "See the Skills tab in Customize and browse/preview the skills catalog",
+    "connectors.view": "See the Connectors tab in Customize, browse the connector catalog and manage personal connectors",
+    "plugins.view": "See the Plugins tab in Customize and browse/preview the plugins catalog",
+    "agents.view": "See the Agents tab in Customize, the My Agents list and use custom agents and the Agent Library",
     "settings.shell.configure": "Edit the global shell command allowlist (capabilities.shell)",
     "settings.agents.configure": "Allow/deny Agent Library profiles and prompt commands (agent_library)",
     "settings.router.configure": "Edit agent routing rules and apply/dismiss usage-based router suggestions (router)",
@@ -81,6 +86,21 @@ PERMISSION_META = {
                    "Shows who did what and when, including denied actions. View only."),
     "database.manage": ("insight", "write", "Open the database and run queries",
                         "Lets the person read and change the system's stored data directly. Very powerful - admins only."),
+    "database.view": ("insight", "read", "Browse the usage and workspace databases",
+                      "Shows the usage statistics database and the person's own project databases, table by table. "
+                      "No SQL console, and the login, chat history and memory databases stay hidden. View only."),
+    "skills.view": ("behaviour", "read", "See skills",
+                    "Shows the Skills tab in Customize so the person can browse and preview available skills. "
+                    "Installing or removing one needs the install permission. View only."),
+    "connectors.view": ("behaviour", "read", "See connectors",
+                        "Shows the Connectors tab in Customize and the connector catalog, and lets the person manage "
+                        "their own personal connectors. Shared connectors still need the install permission. View only."),
+    "plugins.view": ("behaviour", "read", "See plugins",
+                     "Shows the Plugins tab in Customize so the person can browse and preview plugins. "
+                     "Installing or removing one needs the install permission. View only."),
+    "agents.view": ("behaviour", "read", "See and use custom agents",
+                    "Shows the Agents tab in Customize, the My Agents list and the agent library, and lets the person "
+                    "pick a custom agent in chat. Sharing an agent with everyone needs the approve permission. View only."),
     "users.manage": ("access", "write", "Create and manage users and tokens",
                      "Adds people, disables them, changes their role and issues API tokens."),
     "roles.manage": ("access", "write", "Edit roles and their permissions",
@@ -108,7 +128,10 @@ _DEFAULT_USER_PERMISSIONS = ("chat.use",)
 # Keys that did not exist before, given once (the first start that adds the key) to every role that holds chat.use, so
 # nobody loses a feature on upgrade. Not part of _DEFAULT_USER_PERMISSIONS: that list is re-granted at every start,
 # which would undo an admin taking the key away from a role.
-_GRANT_WITH_CHAT_USE = ("memory.use",)
+_GRANT_WITH_CHAT_USE = ("memory.use", "skills.view", "connectors.view", "plugins.view", "agents.view")
+# Same idea for a key that narrows an older one: given once, when it is new, to every role that already holds the older key
+# (database.view is a read-only slice of database.manage, so those roles lose nothing).
+_GRANT_WITH_PERM = {"database.view": "database.manage"}
 
 MAX_FAILED_LOGINS = 10
 LOCKOUT_S = 30 * 60

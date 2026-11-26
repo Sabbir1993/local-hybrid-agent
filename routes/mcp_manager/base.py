@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from core import mcp as mcp_core
 from core.deps import require_permission
 
@@ -11,8 +11,17 @@ MANAGE_PERM = "settings.orchestration.configure"
 _manage = require_permission(MANAGE_PERM)
 
 
-# a personal server ("just for me") only needs the ordinary app permission
-_use = require_permission("chat.use")
+# a personal server ("just for me") needs the ordinary app permission and the right to see connectors (the Connectors tab)
+_chat = require_permission("chat.use")
+_view = require_permission("connectors.view")
+
+
+async def _use(user=Depends(_chat), _v=Depends(_view)):
+    return user
+
+
+_use._require_permission_key = "connectors.view"
+_use._require_permission_keys = ("chat.use", "connectors.view")
 
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])

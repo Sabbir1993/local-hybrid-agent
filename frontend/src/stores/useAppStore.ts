@@ -297,6 +297,7 @@ interface AppState {
   openProfileModal: () => void;
   openCustomizeModal: (tab?: 'skills' | 'connectors' | 'plugins' | 'agents') => void;
   hasPerm: (permission: string) => boolean;
+  hasAnyPerm: (...permissions: string[]) => boolean;
 }
 
 // One entry per chat whose answer is still streaming; a chat keeps running when you switch to another one.
@@ -796,6 +797,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (user.is_super_admin) return true;
     return Boolean(user.permissions && user.permissions.includes(permission));
   },
+
+  hasAnyPerm: (...permissions: string[]) => permissions.some((p) => get().hasPerm(p)),
 
   checkAuth: async () => {
     try {

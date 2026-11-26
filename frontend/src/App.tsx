@@ -263,7 +263,8 @@ export function App() {
     );
   }
 
-  if (activeModal === 'report') {
+  // the header hides these buttons without the permission; the page itself re-checks, and the server refuses the data anyway
+  if (activeModal === 'report' && hasPerm('usage.report.view')) {
     return (
       <>{routeLoader}<ErrorBoundary fallbackTitle="Token Usage Report">
         <ReportModal />
@@ -271,7 +272,7 @@ export function App() {
     );
   }
 
-  if (activeModal === 'audit') {
+  if (activeModal === 'audit' && hasPerm('audit.view')) {
     return (
       <>{routeLoader}<ErrorBoundary fallbackTitle="Security & Audit Logs">
         <AuditModal />
@@ -279,7 +280,7 @@ export function App() {
     );
   }
 
-  if (activeModal === 'db') {
+  if (activeModal === 'db' && (hasPerm('database.manage') || hasPerm('database.view'))) {
     return (
       <>{routeLoader}<ErrorBoundary fallbackTitle="Database Explorer">
         <DbModal />

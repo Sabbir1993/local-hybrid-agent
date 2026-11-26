@@ -159,8 +159,11 @@ def _is_authed(fns) -> bool:
 
 
 def _permission_keys(fns) -> set:
-    return {getattr(f, "_require_permission_key")
+    keys = {getattr(f, "_require_permission_key")
             for f in fns if getattr(f, "_require_permission_key", None) is not None}
+    for f in fns:                                     # a gate that accepts any of several keys (core.deps.require_any_permission)
+        keys.update(getattr(f, "_require_permission_keys", ()) or ())
+    return keys
 
 
 class AuthInvariant(unittest.TestCase):

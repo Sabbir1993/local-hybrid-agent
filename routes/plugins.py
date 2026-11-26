@@ -48,7 +48,7 @@ def _entry(name: str):
 
 
 @router.get("/catalog")
-async def catalog():
+async def catalog(user: Principal = Depends(require_permission("plugins.view"))):
     installed = {p["name"]: p for p in plugins_core.plugins_status()}
     items = []
     for e in plugins_core.catalog_entries():

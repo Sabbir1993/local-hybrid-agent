@@ -5,7 +5,7 @@ from core.agent_library import library_status
 from core.audit import audit_log
 from core.auth import Principal
 from core.config import CONFIG_FILE, write_app_config
-from core.deps import get_current_user, require_permission
+from core.deps import get_current_user, require_any_permission, require_permission
 from core.small_model import APP_CONFIG
 from ..models import AgentLibraryReq
 
@@ -13,9 +13,9 @@ from .base import router
 
 
 @router.get("/control/agent_library")
-async def agent_library_get(user: Principal = Depends(get_current_user)):
+async def agent_library_get(user: Principal = Depends(require_any_permission("agents.view", "settings.agents.configure"))):
     """Every Agent Library profile / prompt command with its allow/deny state and
-    compatibility warnings (read-only for everyone; editing needs the permission)."""
+    compatibility warnings (read-only for anyone who may see agents; editing needs settings.agents.configure)."""
     return library_status()
 
 

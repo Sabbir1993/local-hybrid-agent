@@ -137,7 +137,7 @@ API_TOKEN_PREFIX = "a770_pat_"
 API_TOKEN_MAX_DAYS = 90
 # Account/role/DB administration stays behind an interactive, MFA-able login:
 # a leaked token must never be able to mint admins or read auth.db.
-API_TOKEN_FORBIDDEN_PERMS = frozenset({"users.manage", "roles.manage", "database.manage"})
+API_TOKEN_FORBIDDEN_PERMS = frozenset({"users.manage", "roles.manage", "database.manage", "database.view"})
 
 
 def create_api_token(user_id: int, name: str, permissions, days: int,

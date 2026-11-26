@@ -55,6 +55,8 @@ export const Sidebar: React.FC = () => {
   };
 
   const [customAgents, setCustomAgents] = useState<any[]>([]);
+  // custom agents (My Agents, creating and editing them) need agents.view; the server refuses /custom-agents without it
+  const canAgents = useAppStore((s) => s.hasPerm('agents.view'));
   const [showSearch, setShowSearch] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [menuState, setMenuState] = useState<{ x: number; y: number; sid: string | number; title: string } | null>(null);
@@ -427,10 +429,10 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
     <>
       {iconBtn('Filter', () => setShowSearch(!showSearch),
         <path d="M3 6h18M7 12h10M10 18h4" />, { 'aria-expanded': showSearch })}
-      {appMode === 'agent' && iconBtn('My Agents: all your agents, on every device', () => openSettingsModal('sec-custom-agents'),
+      {appMode === 'agent' && canAgents && iconBtn('My Agents: all your agents, on every device', () => openSettingsModal('sec-custom-agents'),
         <><rect x="3" y="7" width="18" height="13" rx="2" /><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></>)}
       {appMode === 'agent'
-        ? iconBtn('New agent', () => openAgentModal('create'), <path d="M12 5v14M5 12h14" />)
+        ? (canAgents && iconBtn('New agent', () => openAgentModal('create'), <path d="M12 5v14M5 12h14" />))
         : iconBtn('Add project', () => openProjectModal('create'),
           <><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /><path d="M12 11v6M9 14h6" /></>)}
     </>
@@ -649,13 +651,15 @@ Folder: ${p.workspace_dir || p.path || '(none)'}` }));
             title="My Agents"
             groups={agentGroups}
             activeGroupId={activeCustomAgent ? String(activeCustomAgent.id) : null}
-            emptyText={<>No agents on this device yet.<br />Create one with +, or fork one from <a href="#" onClick={(e) => { e.preventDefault(); openSettingsModal('sec-custom-agents'); }}>My Agents</a>.</>}
+            emptyText={canAgents
+              ? <>No agents on this device yet.<br />Create one with +, or fork one from <a href="#" onClick={(e) => { e.preventDefault(); openSettingsModal('sec-custom-agents'); }}>My Agents</a>.</>
+              : <>Custom agents are not enabled for your account.</>}
             headerActions={treeHeaderActions}
             onPickGroup={(g) => { const a = deviceAgents.find((x) => String(x.id) === g.id); if (a) setActiveCustomAgent(a); }}
             onNewSession={(g) => { const a = deviceAgents.find((x) => String(x.id) === g.id); if (a) setActiveCustomAgent(a); createSession(); }}
             groupMenu={(g) => {
               const a = deviceAgents.find((x) => String(x.id) === g.id);
-              if (!a) return [];
+              if (!a || !canAgents) return [];
               return [
                 { label: 'Edit agent', onClick: () => openAgentModal('edit', a) },
                 { label: 'Fork agent', onClick: () => openAgentModal('fork', a) },

@@ -64,6 +64,32 @@ def require_permission(key: str):
     return _dep
 
 
+def require_any_permission(*keys: str):
+    """Pass when the caller holds at least one of `keys` (a broad key and the narrower one cut from it, e.g. database.manage or
+    database.view). A deny is audited under the first key. The marker lists every key for tests/test_auth_invariant.py."""
+    async def _dep(request: Request, user: Principal = Depends(get_current_user)) -> Principal:
+        if not any(user_has_permission(user, k) for k in keys):
+            ip = request.client.host if request.client else None
+            audit_log(user, action=keys[0], permission_key=keys[0], result="deny", ip=ip)
+            raise HTTPException(status_code=403, detail="missing permission: " + " or ".join(keys))
+        return user
+    _dep._require_permission_key = keys[0]
+    _dep._require_permission_keys = tuple(keys)
+    return _dep
+
+
+def require_verified_any(*keys: str):
+    """require_any_permission + the MFA step-up of require_verified."""
+    base = require_any_permission(*keys)
+
+    async def _dep(request: Request, user: Principal = Depends(base)) -> Principal:
+        _ensure_step_up(user, request, action=keys[0])
+        return user
+    _dep._require_permission_key = keys[0]
+    _dep._require_permission_keys = tuple(keys)
+    return _dep
+
+
 def _ensure_step_up(user: Principal, request: Request, action: str) -> None:
     """Step-up: an MFA-enrolled user on an unverified session stops here.
     Users without MFA pass through unchanged (opt-in era); API tokens never

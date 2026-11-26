@@ -7,11 +7,11 @@ import { PreviewModal } from './PreviewModal';
 import { DiagramModal } from './DiagramModal';
 
 export const DevModals: React.FC = () => {
-  const { activeModal } = useAppStore();
+  const { activeModal, hasAnyPerm } = useAppStore();
 
   return (
     <>
-      {activeModal === 'customize' && <CustomizeModal />}
+      {activeModal === 'customize' && hasAnyPerm('skills.view', 'connectors.view', 'plugins.view', 'agents.view') && <CustomizeModal />}
       {activeModal === 'monitor' && <MonitorDrawer />}
       {activeModal === 'docs' && <DocsModal />}
       <PreviewModal />

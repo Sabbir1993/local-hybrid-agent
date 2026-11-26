@@ -5,13 +5,14 @@ from core import credentials, mcp_catalog
 from core import mcp as mcp_core
 from core.audit import audit_log
 from core.auth import Principal
+from core.deps import require_permission
 
 from .base import MANAGE_PERM, _manage, _server_status, router
 from .store import _persist_server_entry, _remove_server_entry, _server_cfg
 
 
 @router.get("/catalog")
-async def catalog():
+async def catalog(user: Principal = Depends(require_permission("connectors.view"))):
     out = []
     for entry in mcp_catalog.catalog_with_overrides():
         sid = entry["id"]
@@ -30,7 +31,8 @@ async def catalog():
 
 
 @router.get("/registry/search")
-async def registry_search(q: Optional[str] = None):
+async def registry_search(q: Optional[str] = None,
+                          user: Principal = Depends(require_permission("connectors.view"))):
     """Browse-only lookup against the public MCP Registry (no auth wiring)."""
     return await mcp_catalog.fetch_public_registry(q)
 

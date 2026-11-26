@@ -1,9 +1,11 @@
 from typing import Optional
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from core.config import BASE_DIR
 from core.small_model import APP_CONFIG
+from core.audit import audit_log
+from core.auth import user_has_permission
 from core.deps import require_permission
 
 
@@ -14,6 +16,17 @@ _manage = require_permission(_PERM)
 
 
 KINDS = ("skills", "plugins", "connectors")
+
+
+# who may see (browse, preview) each tab of Customize; installing and removing keep _PERM / the connector scope rules
+VIEW_PERMS = {"skills": "skills.view", "plugins": "plugins.view", "connectors": "connectors.view"}
+
+
+def require_view(user, kind: str) -> None:
+    key = VIEW_PERMS.get(kind)
+    if key and not user_has_permission(user, key):
+        audit_log(user, action=key, permission_key=key, result="deny")
+        raise HTTPException(status_code=403, detail=f"missing permission: {key}")
 
 
 MAX_PREVIEW_CHARS = 20000

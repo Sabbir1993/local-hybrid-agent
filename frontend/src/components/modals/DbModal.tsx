@@ -144,11 +144,13 @@ function formatBytes(bytes?: number): string {
 }
 
 export const DbModal: React.FC = () => {
-  const { activeModal, setActiveModal } = useAppStore();
+  const { activeModal, setActiveModal, hasPerm } = useAppStore();
   const isOpen = activeModal === 'db';
+  // database.manage = SQL console on every database; database.view = read-only browsing (usage + own workspace databases)
+  const canQuery = hasPerm('database.manage');
 
   const [dbs, setDbs] = useState<DbInfo[]>([]);
-  const [currentDbId, setCurrentDbId] = useState<string>('auth');
+  const [currentDbId, setCurrentDbId] = useState<string>(canQuery ? 'auth' : '');
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [currentTable, setCurrentTable] = useState<string>('');
   const [tableFilter, setTableFilter] = useState<string>('');
@@ -249,7 +251,8 @@ export const DbModal: React.FC = () => {
           setCurrentTable(firstTbl);
           const defaultSql = `SELECT * FROM "${firstTbl}" LIMIT 50;`;
           setSql(defaultSql);
-          runQuery(defaultSql, currentDbId);
+          if (canQuery) runQuery(defaultSql, currentDbId);
+          else loadTableData(firstTbl, currentDbId);
         } else {
           setCurrentTable('');
           setSql('');
@@ -260,7 +263,27 @@ export const DbModal: React.FC = () => {
       });
   }, [isOpen, currentDbId]);
 
+  // Read-only view (database.view): rows come from the paginated table endpoint, never from the SQL console.
+  const loadTableData = async (tbl: string, dbId: string) => {
+    setIsRunning(true);
+    setStatusMsg({ type: 'loading', text: 'Loading table…' });
+    try {
+      const resp = await apiFetch(`/db/${encodeURIComponent(dbId)}/table/${encodeURIComponent(tbl)}/data?limit=50`);
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || data.error || 'HTTP ' + resp.status);
+      const rows: any[][] = data.rows || [];
+      setLastResult({ columns: data.columns || [], rows, row_count: rows.length, truncated: (data.total ?? rows.length) > rows.length });
+      setStatusMsg({ type: 'success', text: `${rows.length} of ${data.total ?? rows.length} row(s) · read only` });
+    } catch (e: any) {
+      setStatusMsg({ type: 'error', text: `Error: ${e.message}` });
+      setLastResult({ error: e.message });
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
   const runQuery = async (queryText?: string, dbIdOverride?: string) => {
+    if (!canQuery) return;
     const targetSql = (queryText !== undefined ? queryText : sql).trim();
     const targetDb = dbIdOverride || currentDbId;
 
@@ -319,7 +342,8 @@ export const DbModal: React.FC = () => {
     setCurrentTable(tblName);
     const newSql = `SELECT * FROM "${tblName}" LIMIT 50;`;
     setSql(newSql);
-    runQuery(newSql);
+    if (canQuery) runQuery(newSql);
+    else loadTableData(tblName, currentDbId);
   };
 
   const handleClear = () => {
@@ -508,7 +532,13 @@ export const DbModal: React.FC = () => {
 
           {/* Right Main Pane */}
           <div className="db-main-pane">
-            {/* Editor Section */}
+            {/* Editor Section: the SQL console needs database.manage */}
+            {!canQuery && (
+              <div className="db-status-bar" style={{ padding: '8px 12px', color: statusMsg.type === 'error' ? 'var(--red)' : 'var(--dim)' }}>
+                Read-only view · {statusMsg.text}
+              </div>
+            )}
+            {canQuery && (
             <div className="db-editor-box">
               <div className="db-editor-toolbar">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
@@ -712,6 +742,7 @@ export const DbModal: React.FC = () => {
                 </div>
               </div>
             </div>
+            )}
 
             {/* Output Tabs Bar */}
             <div className="db-tabs-bar">

@@ -2,16 +2,16 @@ from typing import Optional
 from fastapi import Depends
 from core import mcp_catalog
 from core.auth import Principal
-from core.deps import get_current_user
+from core.deps import get_current_user, require_permission
 from core import plugins as plugins_core
 from core import skills as skills_core
 
-from .base import KINDS, MAX_PREVIEW_CHARS, _caps, _err, router
+from .base import KINDS, MAX_PREVIEW_CHARS, _caps, _err, require_view, router
 from .listing import _ENABLED_KEY, _LISTERS
 
 
 @router.get("/connectors/registry")
-async def registry_search(q: Optional[str] = None):
+async def registry_search(q: Optional[str] = None, user: Principal = Depends(require_permission("connectors.view"))):
     """Browse-only public MCP Registry lookup, normalized for cards. No install path."""
     raw = await mcp_catalog.fetch_public_registry((q or "").strip()[:100] or None)
     if raw.get("error"):
@@ -36,6 +36,7 @@ async def registry_search(q: Optional[str] = None):
 async def list_kind(kind: str, user: Principal = Depends(get_current_user)):
     if kind not in KINDS:
         return _err(f"unknown kind '{kind}'", 404)
+    require_view(user, kind)
     items = _LISTERS[kind](user.id)
     categories: dict = {}
     for it in items:
@@ -46,8 +47,9 @@ async def list_kind(kind: str, user: Principal = Depends(get_current_user)):
 
 
 @router.get("/{kind}/{item_id}/preview")
-async def preview(kind: str, item_id: str):
+async def preview(kind: str, item_id: str, user: Principal = Depends(get_current_user)):
     """Read-only source so an admin can review exactly what an install would add."""
+    require_view(user, kind)
     if kind == "skills":
         if not skills_core.valid_name(item_id):
             return _err("invalid skill name")
