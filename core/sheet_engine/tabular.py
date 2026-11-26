@@ -16,7 +16,7 @@ from typing import Optional
 
 from .pseudo import with_header
 
-MAX_SHEETS = 20
+MAX_SHEETS = 30
 MAX_COLS = 40
 _MD_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
 _CODE_LANGS = frozenset("python py javascript js jsx typescript ts tsx bash sh shell powershell ps1 zsh json xml html css yaml yml "

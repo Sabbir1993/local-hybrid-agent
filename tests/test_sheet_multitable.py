@@ -89,6 +89,48 @@ def test_a_single_table_sheet_is_unchanged_and_an_empty_row_is_not_a_new_table()
     assert ws["B3"].value == 2
 
 
+def test_tables_without_outer_pipes_and_without_a_separator_row_are_read():
+    # exactly what a model wrote: `Section | Metric | ...` lines, no leading pipe, no |---| row
+    out = ("## Sheet: 1. Executive Summary & KPIs\nSection | Metric | Value | Period | Source / Note\n"
+           "Corporate Profile | Founded | 2001 | n/a | Wikipedia\nFinancials | Net profit | 2250 | FY2025 | TBS\n")
+    ws = _ws(out, "1. Executive Summary & KPIs")
+    assert [c.value for c in ws[1]] == ["Section", "Metric", "Value", "Period", "Source / Note"]
+    assert [c.value for c in ws[3]] == ["Financials", "Net profit", 2250, "FY2025", "TBS"]
+
+
+def test_github_style_table_without_outer_pipes_with_separator():
+    ws = _ws("## Sheet: A\nMetric | Value\n--- | ---\nx | 1\n", "A")
+    assert [c.value for c in ws[1]] == ["Metric", "Value"] and [c.value for c in ws[2]] == ["x", 1]
+
+
+def test_a_second_table_without_outer_pipes_becomes_a_block():
+    ws = _ws("## Sheet: A\nMetric | Value | Src\nx | 1 | s\n\nOther facts\nEntity | Role | Stake\nAlpha | Parent | 51%\n", "A")
+    flat = [[c.value for c in row][:3] for row in ws.iter_rows()]
+    assert ["Entity", "Role", "Stake"] in flat and ["Alpha", "Parent", 0.51] in flat
+
+
+def test_directives_and_prose_with_a_pipe_are_not_taken_for_rows():
+    out = "## Sheet: A\n| K | V |\n|---|---|\n| a | 1 |\nchart: bar | title=T | x=K | y=V\nNote: source: A | B\n"
+    ws = _ws(out, "A")
+    assert ws.max_row < 12, "the chart directive must not become a data row"
+    texts = [str(c.value) for row in ws.iter_rows() for c in row if c.value is not None]
+    assert not any(t.startswith("chart:") for t in texts)
+
+
+def _n_sheets(n):
+    return "# T\n" + "".join(f"## Sheet: S{i}\n| A | B |\n|---|---|\n| x | {i} |\n" for i in range(n))
+
+
+def test_up_to_thirty_sheets_build_and_more_gets_an_actionable_error():
+    wb = openpyxl.load_workbook(io.BytesIO(B.build(_n_sheets(25), "t", True)))
+    assert len(wb.sheetnames) == 25
+    try:
+        B.build(_n_sheets(31), "t", True)
+        raise AssertionError("31 sheets should be refused")
+    except B.BuildError as e:
+        assert "31 sheets written" in str(e) and "merge" in str(e)
+
+
 def test_explicit_blocks_still_work_next_to_detected_ones():
     out = "# T\n## Sheet: S\n| A |\n|---|\n| 1 |\n### Block: Extra | at=E1\n| K | V |\n|---|---|\n| a | 1 |\n"
     ws = _ws(out, "S")

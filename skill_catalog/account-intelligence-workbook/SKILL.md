@@ -41,7 +41,7 @@ Optional modules (pick from the request and the account type; user instructions 
 | Seller Relationship | what {seller} already sells to {account} |
 | Opportunities | scored list for {seller} (see read_skill(seller-opportunity-scoring)) |
 | Regulatory | see read_skill(regulatory-context-check) |
-Account type guides defaults: bank/FI -> Digital Channels, IT Budget, Procurement, Regulatory; telco -> Segments, Digital Channels, Vendors; merchant/retail -> Segments, CX Sentiment, Competitors. Sheet limit is 20 and sheet names max 31 chars; merge or drop modules to fit.
+Account type guides defaults: bank/FI -> Digital Channels, IT Budget, Procurement, Regulatory; telco -> Segments, Digital Channels, Vendors; merchant/retail -> Segments, CX Sentiment, Competitors. Sheet limit is 30 and sheet names max 31 chars; aim for 12-20 focused sheets and merge related modules (several tables under one sheet) instead of reaching the limit.
 
 ## 2. Research
 Follow read_skill(account-research). Collect facts into rows of: `Metric | Value | As of | Trend | Why it matters to {seller} | Source ID | Status`. Source IDs and Status follow read_skill(account-source-register).

@@ -55,7 +55,7 @@ from typing import Optional
 
 from .formulas import FormulaError, check_formula, to_file_form
 
-MAX_SHEETS = 20
+MAX_SHEETS = 30
 MAX_COLS = 100
 MAX_ROWS_TOTAL = 50_000
 
@@ -150,6 +150,21 @@ def _is_sep(cells: list) -> bool:
     return bool(cells) and all(re.fullmatch(r":?-{2,}:?", c.strip()) or not c.strip() for c in cells)
 
 
+_PIPE_RX = re.compile(r"(?<!\\)\|")
+
+
+def _pipe_row(line: str, was_table: bool, next_line: str) -> bool:
+    """A table row written without the outer pipes (`Metric | Value | Source`, valid GitHub markdown, and what a small model
+    often writes). Not a directive or a heading; it needs two or more pipes, or to sit inside a table, or to be followed by (or
+    be) a `--- | ---` separator."""
+    if "|" not in line or line.lstrip().startswith("#") or _DIRECTIVE_RX.match(line):
+        return False
+    n = len(_PIPE_RX.findall(line))
+    if n >= 2 or was_table:
+        return True
+    return _dash_sep(_split_row(line)) or (bool(next_line) and "|" in next_line and _dash_sep(_split_row(next_line)))
+
+
 _EMPH_RX = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
 
 
@@ -177,10 +192,10 @@ def parse(text: str) -> dict:
         cur = {"name": name, "header": None, "rows": [], "directives": [], "dashboard": dashboard, "blocks": []}
         wb["sheets"].append(cur)
         block = None
-    for raw in str(text or "").splitlines():
-        line = raw.rstrip()
-        if not line.strip():
-            continue
+    lines = [r.rstrip() for r in str(text or "").splitlines() if r.strip()]
+    in_table = False                    # the previous kept line was a table row
+    for li, line in enumerate(lines):
+        was_table, in_table = in_table, False
         m = _SHEET_RX.match(line)
         if m:
             start(m.group(1))
@@ -206,7 +221,10 @@ def parse(text: str) -> dict:
             if d:
                 wb["theme"] = d.group(1).lower()
                 continue
-        if line.lstrip().startswith("|"):
+        if line.lstrip().startswith("|") or (
+                cur is not None and not cur["dashboard"]
+                and _pipe_row(line, was_table, lines[li + 1] if li + 1 < len(lines) else "")):
+            in_table = True
             if cur is None:
                 start("Sheet1")
             cells = [_plain(c) for c in _split_row(line)]
@@ -361,7 +379,8 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
     if not any(s["header"] for s in spec["sheets"]):
         raise BuildError("no sheet with a table found - write `## Sheet: Name` followed by a markdown table")
     if len(spec["sheets"]) > MAX_SHEETS:
-        raise BuildError(f"at most {MAX_SHEETS} sheets per workbook")
+        raise BuildError(f"{len(spec['sheets'])} sheets written, at most {MAX_SHEETS} per workbook: merge related sheets "
+                         "(several tables can sit under one `## Sheet:`, each with its own header) and send it again")
     if sum(len(s["rows"]) for s in spec["sheets"]) > MAX_ROWS_TOTAL:
         raise BuildError(f"too many rows (limit {MAX_ROWS_TOTAL:,}); build the rest with doc_edit append_rows")
     accent, band = THEMES.get(spec["theme"], THEMES[DEFAULT_THEME])
