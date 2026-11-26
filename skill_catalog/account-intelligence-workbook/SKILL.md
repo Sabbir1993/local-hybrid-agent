@@ -48,7 +48,7 @@ Follow read_skill(account-research). Collect facts into rows of: `Metric | Value
 
 ## 3. Outline skeleton (workbook builder)
 Rules of the builder:
-- Each `## Sheet:` holds one table; directives (`format:`, `highlight:`, `validate:`, `widths:`, `freeze:`, `input:`, `note:`) go after the table. If the builder reports a warning, fix the outline and rebuild; do not ignore it.
+- A sheet's first table is its main table. Further tables under the same `## Sheet:` are allowed (up to 16): each is placed under the previous one, with the text line just above its header row (e.g. `### Branch network`) as its title, and keeps its own columns. Formulas pointing into a later table need that table's real rows. Directives (`format:`, `highlight:`, `validate:`, `widths:`, `freeze:`, `input:`, `note:`) go after the table. If the builder reports a warning, fix the outline and rebuild; do not ignore it.
 - **Report layout (use on every data sheet):** `banner: <sheet title>` and `subtitle: <unit, basis, period>` lines go right under `## Sheet:` and render as merged title rows. `| >> SECTION NAME | | |` inside a table is a merged section band. `input: Col1, Col2` marks columns the reader may change (yellow fill, blue text).
 - **Row offset (critical for formulas):** header row = 1 with no banner, 3 with a banner only, 4 with banner + subtitle. Data row n is at row `header + n`; a section band counts as a data row. Example with banner + subtitle: band = row 5, first metric = row 6. Write every formula and every cross-sheet reference with these real row numbers, and re-check them after the table is final.
 - `widths:` accepts header names or letters (`widths: Metric=34, B=12`).

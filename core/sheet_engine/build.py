@@ -67,7 +67,7 @@ SECTION_PREFIX = ">> "          # a table row `| >> INCOME STATEMENT | | |` beco
 _DIRECTIVE_RX = re.compile(r"^\s*(" + "|".join(DIRECTIVES) + r")\s*:\s*(.*?)\s*$", re.I)
 _SHEET_RX = re.compile(r"^\s*##\s*sheet\s*:\s*(.+?)\s*$", re.I)
 _BLOCK_RX = re.compile(r"^\s*###\s*block\s*:\s*(.+?)\s*$", re.I)
-MAX_BLOCKS = 8
+MAX_BLOCKS = 16
 _DASH_RX = re.compile(r"^\s*##\s*dashboard\s*:\s*(.+?)\s*$", re.I)
 _TITLE_RX = re.compile(r"^\s*#\s+(.+?)\s*$")
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -150,10 +150,27 @@ def _is_sep(cells: list) -> bool:
     return bool(cells) and all(re.fullmatch(r":?-{2,}:?", c.strip()) or not c.strip() for c in cells)
 
 
+_EMPH_RX = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
+
+
+def _plain(s: str) -> str:
+    """`**bold**` markers a model puts in table cells are not Excel: drop them (formulas are left alone; `__x__` is kept, it
+    is usually an identifier)."""
+    s = str(s)
+    return s if s.lstrip().startswith("=") else _EMPH_RX.sub(r"\1", s)
+
+
+def _dash_sep(cells: list) -> bool:
+    """A real markdown separator row (`|---|---|`): at least one dashes cell, so an empty spacer row is not mistaken for one."""
+    return _is_sep(cells) and any(re.fullmatch(r":?-{2,}:?", c.strip()) for c in cells)
+
+
 def parse(text: str) -> dict:
     wb = {"title": "", "theme": DEFAULT_THEME, "sheets": [], "names": []}
     cur: Optional[dict] = None
     block: Optional[dict] = None        # the `### Block:` being read (a further table on the current sheet)
+    pending_title = ""                  # the last text line that was not a table or directive: the title of the next table
+    row_title = ""                      # the text that stood just above the table row read last
 
     def start(name, dashboard=False):
         nonlocal cur, block
@@ -192,10 +209,21 @@ def parse(text: str) -> dict:
         if line.lstrip().startswith("|"):
             if cur is None:
                 start("Sheet1")
-            cells = _split_row(line)
+            cells = [_plain(c) for c in _split_row(line)]
+            target = block if block is not None else cur
+            if _dash_sep(cells):
+                if target["header"] is not None and target["rows"]:
+                    # a separator right under a data row: that row was the HEADER of a further table on this sheet (a model
+                    # writes several tables under one `## Sheet:`). Keep it as its own block instead of mixing its rows,
+                    # with the other table's columns, into this one.
+                    hdr = target["rows"].pop()
+                    block = {"title": row_title or f"Table {len(cur['blocks']) + 2}", "at": "", "header": hdr,
+                             "rows": [], "directives": []}
+                    cur["blocks"].append(block)
+                continue
             if _is_sep(cells):
                 continue
-            target = block if block is not None else cur
+            row_title, pending_title = pending_title, ""
             if target["header"] is None:
                 target["header"] = cells
             else:
@@ -210,6 +238,8 @@ def parse(text: str) -> dict:
                 if cur is None:
                     start("Sheet1")
                 (block if block is not None and key in ("format", "total") else cur)["directives"].append((key, val))
+        elif cur is not None:
+            pending_title = _plain(line).strip().lstrip("#").strip().rstrip(":").strip()[:80]
     wb["sheets"] = [s for s in wb["sheets"]
                     if s["header"] or (s["dashboard"] and any(k in ("kpi", "chart") for k, _ in s["directives"]))]
     return wb
@@ -247,7 +277,7 @@ def _infer(values: list) -> Optional[str]:
 def _to_number(s: str):
     t = str(s).strip()
     if _PCT.match(t):
-        return float(t.rstrip("% ").replace(" ", "")) / 100
+        return round(float(t.rstrip("% ").replace(" ", "")) / 100, 10)        # 57.2% -> 0.572, not 0.5720000000000001
     m = _CURRENCY.match(t)
     if m:
         n = float(m.group("num").replace(",", ""))
@@ -426,6 +456,8 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                         c.data_type = "s"          # plain text never becomes a formula
                 if nf and (is_formula or isinstance(val, (int, float)) or hasattr(val, "isoformat")):
                     c.number_format = nf
+                elif isinstance(val, float) and isinstance(raw, str) and _PCT.match(raw.strip()):
+                    c.number_format = "0.0%"       # a "46.2%" cell in a mixed column still shows as a percent, not 0.462
                 c.border = Border(bottom=thin)
                 if isinstance(val, (int, float)) or is_formula:
                     c.alignment = Alignment(horizontal="right", vertical="top")
@@ -928,6 +960,8 @@ def _block(ws, b: dict, sheet: str, below: int, accent: str, band: str, names: l
             nf = _named_format(kind) if kind else None
             if nf and (is_formula or isinstance(val, (int, float)) or hasattr(val, "isoformat")):
                 c.number_format = nf
+            elif isinstance(val, float) and isinstance(raw, str) and _PCT.match(raw.strip()):
+                c.number_format = "0.0%"
             if (ri - hr) % 2 == 0:
                 c.fill = PatternFill("solid", fgColor=band)
     last = hr + len(rows)
