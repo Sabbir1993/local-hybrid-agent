@@ -19,6 +19,8 @@ Outline (what the model writes):
     scale: Revenue
     validate: Region in [Dhaka, Khulna]
     chart: bar | title=Revenue by region | x=Region | y=Revenue
+    link: Region                (cells that name a sheet of the workbook become links to it)
+    rowformat: Net margin=0.0%  (one row's number cells get this format, over the column's: a wide period table mixes units)
 
 A dashboard sheet has no table: KPI tiles (big numbers that point at the data with formulas) and charts over other sheets:
 
@@ -61,7 +63,7 @@ MAX_ROWS_TOTAL = 50_000
 
 DIRECTIVES = ("format", "total", "freeze", "filter", "highlight", "scale", "databar", "validate", "table", "name", "chart",
               "widths", "note", "print", "tab", "wrap", "hide", "merge", "color", "align", "border", "kpi", "title",
-              "banner", "subtitle", "input")
+              "banner", "subtitle", "input", "icons", "style", "auto", "link", "rowformat")
 MAX_KPIS = 12
 SECTION_PREFIX = ">> "          # a table row `| >> INCOME STATEMENT | | |` becomes a merged section band
 _DIRECTIVE_RX = re.compile(r"^\s*(" + "|".join(DIRECTIVES) + r")\s*:\s*(.*?)\s*$", re.I)
@@ -90,6 +92,10 @@ _FILLS = {"red": ("FFC7CE", "9C0006"), "green": ("C6EFCE", "006100"), "amber": (
 class BuildError(ValueError):
     pass
 
+
+FONT_NAME = "Calibri"           # one typeface for header, body, banner, bands and notes of an auto-designed sheet
+_FMT_RAW = r"[#0,.\-%$€£₹৳ \"A-Za-z/:@_()]+"
+_FMT_RAW_AUTO = r"[#0,.\-%$€£₹৳ \"A-Za-z/:@_()\[\];]+"      # auto-design formats also use `;` sections and `[Red]`
 
 # A decorative directive that cannot be applied (a highlight on a column that is not there, a chart with a wrong column name) must
 # not throw the whole workbook away: it is skipped and reported, the model fixes it with doc_edit. Structural problems and refused
@@ -124,6 +130,38 @@ def warnings_note() -> str:
     return (" Skipped (not applied, fix with doc_edit): " + "; ".join(w[:6]) + (" ..." if len(w) > 6 else "") + ".") if w else ""
 
 
+# What auto-design (autodesign.py) added to the workbook just built, for the tool result; a separate list from the warnings.
+_autodesign_report: contextvars.ContextVar = contextvars.ContextVar("sheet_build_autodesign", default=None)
+
+
+def take_autodesign_report() -> list:
+    r = _autodesign_report.get() or []
+    _autodesign_report.set(None)
+    return list(r)
+
+
+def autodesign_note() -> str:
+    """One line for the tool result about the design added automatically (and clears the report), '' when nothing was added."""
+    r = take_autodesign_report()
+    if not r:
+        return ""
+    return (" Design added automatically: " + ", ".join(r[:6]) + (" ..." if len(r) > 6 else "") +
+            ". Add directives only to change it; `style: plain` turns it off.")
+
+
+def _mkfont(auto: bool):
+    """openpyxl's Font, or (auto-designed sheet) a Font that always names the typeface and size."""
+    from openpyxl.styles import Font
+    if not auto:
+        return Font
+
+    def font(**kw):
+        kw.setdefault("name", FONT_NAME)
+        kw.setdefault("size", 11)
+        return Font(**kw)
+    return font
+
+
 def _cols_hint(header: list) -> str:
     return f" (its columns: {', '.join(str(h) for h in header[:12])})"
 
@@ -132,9 +170,10 @@ def _cols_hint(header: list) -> str:
 def is_outline(text: str) -> bool:
     """A workbook outline has `## Sheet:` headings, or a table with directive lines (format:, chart:, total: ...)."""
     t = str(text or "")
-    if re.search(r"(?mi)^\s*##\s*sheet\s*:", t):
+    if re.search(r"(?mi)^\s*##\s*(sheet|dashboard)\s*:", t):
         return True
-    return bool(re.search(r"(?m)^\s*\|", t)) and bool(re.search(r"(?mi)^\s*(format|total|chart|highlight|scale|databar|validate|table|name|freeze|widths|merge|color|align|border)\s*:", t))
+    return bool(re.search(r"(?m)^\s*\|", t)) and bool(re.search(
+        r"(?mi)^\s*(format|total|chart|highlight|scale|databar|validate|table|name|freeze|widths|merge|color|align|border|banner|subtitle|kpi|input|style|icons|rowformat|link)\s*:", t))
 
 
 def _split_row(line: str) -> list:
@@ -220,10 +259,11 @@ def parse(text: str) -> dict:
     row_title = ""                      # the text that stood just above the table row read last
 
     def start(name, dashboard=False):
-        nonlocal cur, block
+        nonlocal cur, block, pending_title
         cur = {"name": name, "header": None, "rows": [], "directives": [], "dashboard": dashboard, "blocks": []}
         wb["sheets"].append(cur)
         block = None
+        pending_title = ""              # a text line from the end of the previous sheet is not this sheet's lead-in
     lines = [r.rstrip() for r in str(text or "").splitlines() if r.strip()]
     in_table = False                    # the previous kept line was a table row
     csv_n = 0                           # fields per row of the CSV table being read (0 = not in one)
@@ -256,6 +296,10 @@ def parse(text: str) -> dict:
             if d:
                 wb["theme"] = d.group(1).lower()
                 continue
+            d = re.match(r"^\s*style\s*:\s*(\S+)", line, re.I)
+            if d:
+                wb["style"] = d.group(1).lower()
+                continue
         if cur is not None and not cur["dashboard"] and "|" not in line:
             fields = _csv_row(line, was_table and csv_n > 0, csv_n, lines[li + 1] if li + 1 < len(lines) else "")
             if fields is not None:
@@ -276,6 +320,8 @@ def parse(text: str) -> dict:
                 row_title, pending_title = pending_title, ""
                 if target["header"] is None:
                     target["header"] = cells
+                    if target is cur:
+                        cur["lead"] = row_title
                 else:
                     target["rows"].append(cells)
                 continue
@@ -302,6 +348,8 @@ def parse(text: str) -> dict:
             row_title, pending_title = pending_title, ""
             if target["header"] is None:
                 target["header"] = cells
+                if target is cur:
+                    cur["lead"] = row_title       # the text line above the main table: auto-design's subtitle
             else:
                 target["rows"].append(cells)
             continue
@@ -434,9 +482,12 @@ def _kv_pairs(text: str) -> dict:
 # ---- building --------------------------------------------------------------------------------------------------------
 def build(text: str, title: str = "", formulas: bool = True) -> bytes:
     import openpyxl
-    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.styles import Alignment, Border, PatternFill, Side
+    from .autodesign import acct_number, enrich
     _warnings.set([])
     spec = parse(text)
+    spec, report = enrich(spec)
+    _autodesign_report.set(report)
     if not any(s["header"] for s in spec["sheets"]):
         seen = "".join(f" Sheet '{n}' starts with: \"{smp}\"." for n, smp in spec.get("dropped", [])[:2] if smp)
         raise BuildError("no sheet with a table found - write `## Sheet: Name` followed by a markdown table: a header line "
@@ -463,9 +514,16 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
 
     for s in spec["sheets"]:
         ws = wb.create_sheet(s["xname"])
+        auto_s = bool(spec.get("auto") and s.get("auto", True))      # auto-design on for this sheet
         if not s["header"]:                      # a dashboard: KPI tiles and charts, no table
             charts += _dashboard(ws, s, spec, accent, band, names, formulas)
+            if auto_s:
+                ws.oddFooter.center.text = "&A - Page &P of &N"
             continue
+        Font = _mkfont(auto_s)
+        if s.get("nogrid"):                      # the Contents sheet that auto-design adds
+            ws.sheet_view.showGridLines = False
+        numcols = s.get("numcols", set())        # columns auto-design found to be numbers (lower-case header names)
         header = [h or f"Column{i + 1}" for i, h in enumerate(s["header"][:MAX_COLS])]
         ncols = len(header)
         rows = [(r + [""] * ncols)[:ncols] for r in s["rows"]]
@@ -485,8 +543,17 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
             for part in re.split(r"\s*,\s*(?=[^,=]+=)", v):
                 if "=" in part:
                     k, f = part.split("=", 1)
-                    fmt_map[k.strip().lower()] = _named_format(f) or (f.strip() if re.fullmatch(r"[#0,.\-%$€£₹৳ \"A-Za-z/:@_()]+", f.strip()) else None)
+                    fmt_map[k.strip().lower()] = _named_format(f) or (f.strip() if re.fullmatch(_FMT_RAW_AUTO if auto_s else _FMT_RAW, f.strip()) else None)
                     fmt_map.setdefault("__kind__" + k.strip().lower(), f.strip().lower())
+        row_fmt = {}                              # rowformat: Label=format  (first-column label of the row -> number format)
+        for v in dirs.get("rowformat", []):
+            lab, _, f = v.rpartition("=")
+            f = f.strip()
+            nf_ = _named_format(f) or (f if re.fullmatch(_FMT_RAW_AUTO if auto_s else _FMT_RAW, f) else None)
+            if lab.strip() and nf_:
+                row_fmt[lab.strip().lower()] = nf_
+            else:
+                _warn(f"sheet '{s['name']}': rowformat '{v}': expects `Row label=format` (0.0%, #,##0, ...)")
         col_fmt = []
         for ci, h in enumerate(header):
             col_vals = [r[ci] for r in body_rows]
@@ -529,9 +596,18 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                 continue
             for ci, raw in enumerate(row, 1):
                 kind, nf = col_fmt[ci - 1]
+                if ci > 1 and row_fmt:
+                    nf = row_fmt.get(str(row[0]).strip().lower(), nf)
                 where = f"sheet '{s['name']}' cell {col_letter(ci)}{ri}"
-                val, is_formula = _cell_value(raw, kind, names, where, formulas)
+                isnum = header[ci - 1].lower() in numcols
+                # a number column with a custom format string: its cells still have to become numbers
+                vkind = "number" if isnum and kind not in (None, "percent", "int", "number", "text", "@", "general", "date", "datetime")                     and not kind.startswith("currency") else kind
+                val, is_formula = _cell_value(raw, vkind, names, where, formulas)
+                if isnum and isinstance(val, str) and not is_formula:
+                    val = acct_number(val, val)               # (1,234) is minus 1,234
                 c = ws.cell(row=ri, column=ci)
+                if auto_s:
+                    c.font = Font()
                 if is_formula:
                     c.value = val
                 elif val is not None:
@@ -683,12 +759,18 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
         for v in dirs.get("tab", []):
             if re.fullmatch(r"[0-9A-Fa-f]{6}", v.strip()):
                 ws.sheet_properties.tabColor = v.strip().upper()
+        if auto_s:
+            if ws.sheet_properties.tabColor is None:
+                ws.sheet_properties.tabColor = accent
+            ws.oddFooter.center.text = "&A - Page &P of &N"
+            if spec["title"]:
+                ws.oddHeader.left.text = spec["title"].replace("&", "&&")        # & starts a code in header text
 
         # conditional formatting
-        from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, DataBarRule
+        from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, DataBarRule, IconSetRule
         rng = lambda ci: f"{col_letter(ci)}{H + 1}:{col_letter(ci)}{max(last, H + 1)}"      # noqa: E731
         for v in dirs.get("highlight", []):
-            m = re.match(r"^(?P<col>.+?)\s*(?P<op>>=|<=|!=|<>|=|>|<|is)\s*(?P<val>.+?)\s+(?P<color>red|green|amber|yellow|blue|grey|gray)$", v.strip(), re.I)
+            m = re.match(r"^(?P<col>.+?)\s*(?P<op>>=|<=|!=|<>|=|>|<|\bis\b)\s*(?P<val>.+?)\s+(?P<color>red|green|amber|yellow|blue|grey|gray)$", v.strip(), re.I)
             m_bw = re.match(r"^(?P<col>.+?)\s+between\s+(?P<a>.+?)\s+and\s+(?P<b>.+?)\s+(?P<color>red|green|amber|yellow|blue|grey|gray)$", v.strip(), re.I)
             if not (m or m_bw):
                 _warn(f"sheet '{s['name']}': highlight '{v}': expects `Column<value red` or `Column between a and b color`")
@@ -714,7 +796,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                 formula = val if _to_number(val) is not None else _quoted(val)
                 ws.conditional_formatting.add(rng(idx), CellIsRule(operator=op, formula=[formula],
                                               fill=PatternFill("solid", bgColor=bg, fgColor=bg), font=Font(color=fg)))
-        for key in ("scale", "databar"):
+        for key in ("scale", "databar", "icons"):
             for v in dirs.get(key, []):
                 reverse = v.strip().lower().endswith(" reverse")
                 cname = re.sub(r"\s+reverse$", "", v.strip(), flags=re.I)
@@ -722,7 +804,13 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                 if idx is None:
                     _warn(f"sheet '{s['name']}': {key}: column '{cname}' not found" + _cols_hint(header))
                     continue
-                if key == "scale":
+                if key == "icons":
+                    # three arrows: down below 0, flat at 0, up above 0 (the third threshold is strict)
+                    rule = IconSetRule("3Arrows", "num", [0, 0, 0])
+                    rule.iconSet.cfvo[0].type = "percent"
+                    rule.iconSet.cfvo[2].gte = False
+                    ws.conditional_formatting.add(rng(idx), rule)
+                elif key == "scale":
                     lo, mid, hi = ("63BE7B", "FFEB84", "F8696B") if reverse else ("F8696B", "FFEB84", "63BE7B")
                     ws.conditional_formatting.add(rng(idx), ColorScaleRule(start_type="min", start_color=lo, mid_type="percentile",
                                                                           mid_value=50, mid_color=mid, end_type="max", end_color=hi))
@@ -732,7 +820,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
         # data validation
         from openpyxl.worksheet.datavalidation import DataValidation
         for v in dirs.get("validate", []):
-            m = re.match(r"^(?P<col>.+?)\s+in\s*\[(?P<items>.*)\]\s*$", v.strip(), re.I)
+            m = re.match(r"^(?P<col>.+?)\s+in\s*\[(?P<items>.*)\]\s*(?P<soft>soft)?\s*$", v.strip(), re.I)
             m2 = re.match(r"^(?P<col>.+?)\s+between\s+(?P<a>-?[\d.]+)\s+and\s+(?P<b>-?[\d.]+)\s*$", v.strip(), re.I)
             if not (m or m2):
                 _warn(f"sheet '{s['name']}': validate '{v}': expects `Column in [a, b]` or `Column between 0 and 100`")
@@ -750,6 +838,8 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                 dv = DataValidation(type="whole" if re.fullmatch(r"-?\d+", a + b.replace("-", "")) and "." not in a + b else "decimal",
                                     operator="between", formula1=a, formula2=b, allow_blank=True)
             dv.error, dv.errorTitle, dv.showErrorMessage = "Please pick a valid value", "Invalid entry", True
+            if m and m.group("soft"):              # soft: the list is offered, anything else only warns (auto-design's lists)
+                dv.errorStyle, dv.error, dv.errorTitle = "warning", "Not in the list. Keep it anyway?", "Not a listed value"
             ws.add_data_validation(dv)
             dv.add(f"{col_letter(idx)}{H + 1}:{col_letter(idx)}{max(last + 200, 500)}")      # a few hundred rows of room to add data
 
@@ -918,6 +1008,23 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
                     ws.cell(row=total_row, column=ci).border = Border(top=Side(style="medium", color=accent),
                                                                       bottom=Side(style="double", color=accent))
 
+        # link: Sheet   (the column's cells name sheets of this workbook; each becomes an internal link to that sheet's A1)
+        from openpyxl.worksheet.hyperlink import Hyperlink
+        for v in dirs.get("link", []):
+            ci = _col_of(v)
+            if ci is None:
+                _warn(f"sheet '{s['name']}': link: column '{v.strip()}' not found" + _cols_hint(header))
+                continue
+            for ri in range(H + 1, last + 1):
+                if ri - H - 1 in sec:
+                    continue
+                target = by_name.get(str(rows[ri - H - 1][ci - 1]).strip().lower())
+                if target is None:
+                    continue
+                cell = ws.cell(row=ri, column=ci)
+                cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'" + target["xname"].replace("'", "''") + "'!A1")
+                cell.font = Font(color="0563C1", underline="single")
+
         # notes under the table
         nrow = (total_row or last) + 2
         for v in dirs.get("note", []):
@@ -935,7 +1042,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
             if not b["header"]:
                 _warn(f"sheet '{s['name']}': block '{b['title']}' has no table")
                 continue
-            below = _block(ws, b, s["name"], below, accent, band, names, formulas)
+            below = _block(ws, b, s["name"], below, accent, band, names, formulas, Font)
 
     # defined names
     from openpyxl.workbook.defined_name import DefinedName
@@ -962,7 +1069,7 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
             ref = "'" + ref.replace("!", "'!", 1)
         wb.defined_names[m.group(1)] = DefinedName(m.group(1), attr_text=ref)
 
-    _add_charts(wb, charts, by_name, accent)
+    _add_charts(wb, charts, by_name, accent, bool(spec.get("auto")))
     wb.properties.title = spec["title"] or title
     wb.properties.creator = "Local AI platform"
     from openpyxl.workbook.properties import CalcProperties
@@ -999,10 +1106,10 @@ def _format_room(number_format, digits: int) -> int:
     return digits // 3 + (3 if ".00" in nf else 0) + (2 if '"' in nf else 0) + 1
 
 
-def _block(ws, b: dict, sheet: str, below: int, accent: str, band: str, names: list, formulas: bool) -> int:
+def _block(ws, b: dict, sheet: str, below: int, accent: str, band: str, names: list, formulas: bool, Font) -> int:
     """Write one extra table on a sheet: a title row, a header row, the rows, an optional total. Placed at its `at=` cell,
     else under what is already on the sheet. Formulas in it use real cell addresses. -> the next free row below it."""
-    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.styles import Alignment, PatternFill
     from openpyxl.utils.cell import coordinate_from_string, column_index_from_string
     if b["at"]:
         col_s, r0 = coordinate_from_string(b["at"])
@@ -1048,6 +1155,12 @@ def _block(ws, b: dict, sheet: str, below: int, accent: str, band: str, names: l
                 c.number_format = "0.0%"
             if (ri - hr) % 2 == 0:
                 c.fill = PatternFill("solid", fgColor=band)
+    if b.get("legend"):                          # a colour legend: the first cell of a row is filled with the colour it names
+        for ri, row in enumerate(rows, hr + 1):
+            bg, fg = _FILLS.get(str(row[0]).lower(), ("FFFFFF", "000000"))
+            c = ws.cell(row=ri, column=c0)
+            c.fill = PatternFill("solid", fgColor=bg)
+            c.font = Font(bold=True, color=fg)
     last = hr + len(rows)
     end = last
     codes = {"sum": 109, "avg": 101, "average": 101, "min": 105, "max": 104, "count": 103}
@@ -1133,7 +1246,7 @@ def _dashboard(ws, s: dict, spec: dict, accent: str, band: str, names: list, for
         big.value = val
         if isinstance(val, str) and not is_formula:
             big.data_type = "s"
-        nf = _named_format(fmt) if fmt else None
+        nf = (_named_format(fmt) or (fmt if spec.get("auto") and re.fullmatch(_FMT_RAW_AUTO, fmt) else None)) if fmt else None
         if nf:
             big.number_format = nf
         elif is_formula or isinstance(val, (int, float)):
@@ -1184,10 +1297,95 @@ def _chart_palette(accent: str, n: int = 8) -> list:
     return out[:max(1, n)]
 
 
-def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
+def _axis_format(src: dict, header: str) -> str:
+    """Number format of a chart's value axis: the y column's own format, trimmed to what an axis label can carry."""
+    f = ""
+    for k, v in reversed(src["directives"]):
+        if k == "format":
+            for part in re.split(r"\s*,\s*(?=[^,=]+=)", v):
+                if "=" in part and part.split("=", 1)[0].strip().lower() == header.lower():
+                    f = part.split("=", 1)[1].strip()
+                    break
+            if f:
+                break
+    if not f:
+        ci = next((i for i, h in enumerate(src["header"]) if str(h).lower() == header.lower()), None)
+        kind = _infer([r[ci] for r in src["rows"] if ci is not None and ci < len(r)]) if ci is not None else None
+        f = _named_format(kind) if kind else ""
+    else:
+        f = _named_format(f) or f
+    f = (f or "").split(";")[0]
+    if "%" in f:
+        return '0"%"' if '"%"' in f else "0%"
+    if "0.0" in f and ".00" not in f:
+        return "#,##0.0"
+    return "#,##0" if f else "General"
+
+
+def _txpr(size: int, color: str = "595959"):
+    """Text properties for a chart's axis labels / legend: one typeface, a given size and colour."""
+    from openpyxl.chart.text import RichText
+    from openpyxl.drawing.text import CharacterProperties, Font as DFont, Paragraph, ParagraphProperties
+    cp = CharacterProperties(sz=size * 100, solidFill=color, latin=DFont(typeface=FONT_NAME))
+    return RichText(p=[Paragraph(pPr=ParagraphProperties(defRPr=cp), endParaRPr=cp)])
+
+
+def _styled_title(text: str, color: str, size: int = 12, bold: bool = True):
+    from openpyxl.chart.text import RichText, Text
+    from openpyxl.chart.title import Title
+    from openpyxl.drawing.text import CharacterProperties, Font as DFont, Paragraph, ParagraphProperties, RegularTextRun
+    cp = CharacterProperties(sz=size * 100, b=bold, solidFill=color, latin=DFont(typeface=FONT_NAME))
+    para = Paragraph(pPr=ParagraphProperties(defRPr=cp), r=[RegularTextRun(rPr=cp, t=text)])
+    return Title(tx=Text(rich=RichText(p=[para])), overlay=False)
+
+
+def _polish_chart(ch, kind: str, accent: str, title, src: dict, ycols: list, header: list, flags: set, xt, yt, yfmt=None) -> None:
+    """The look of an auto-designed workbook's charts: framed white chart area, no plot border, light horizontal gridlines,
+    small grey axis text, a title in the accent colour, axis numbers in the y column's format, markers on lines. A failure to
+    style never loses the chart."""
+    from openpyxl.chart.shapes import GraphicalProperties
+    from openpyxl.drawing.line import LineProperties
+    try:
+        ch.graphical_properties = GraphicalProperties(solidFill="FFFFFF", ln=LineProperties(solidFill="D9E2ED"))
+        ch.plot_area.graphicalProperties = GraphicalProperties(solidFill="FFFFFF", ln=LineProperties(noFill=True))
+        if title:
+            ch.title = _styled_title(str(title), accent)
+        if kind in ("pie", "doughnut"):
+            if ch.legend is not None:
+                ch.legend.position = "r"
+                ch.legend.txPr = _txpr(9)
+            return
+        if ch.legend is not None:
+            ch.legend.position = "b"
+            ch.legend.txPr = _txpr(9)
+        for ax, text in ((ch.x_axis, xt), (ch.y_axis, yt)):
+            ax.txPr = _txpr(9)
+            ax.spPr = GraphicalProperties(ln=LineProperties(solidFill="BFC7D1"))
+            ax.title = _styled_title(str(text), "595959", 10, False) if text else None
+        ch.x_axis.majorGridlines = None
+        if ch.y_axis.majorGridlines is not None:
+            ch.y_axis.majorGridlines.spPr = GraphicalProperties(ln=LineProperties(solidFill="E9EEF4"))
+        if kind != "scatter" and ycols:
+            ch.y_axis.number_format = yfmt or _axis_format(src, header[ycols[0] - 1])
+        if getattr(ch, "type", "") == "bar" and "horizontal" in flags:          # first row on top, value axis at the bottom
+            ch.x_axis.scaling.orientation = "maxMin"
+            ch.y_axis.crosses = "max"
+        if kind == "line":
+            for se in ch.series:
+                se.marker.symbol = "circle"
+                se.marker.size = 5
+                col = se.graphicalProperties.line.solidFill
+                rgb = getattr(getattr(col, "srgbClr", None), "val", None)
+                if rgb:
+                    se.marker.graphicalProperties = GraphicalProperties(solidFill=rgb, ln=LineProperties(solidFill=rgb))
+    except Exception:
+        pass
+
+
+def _add_charts(wb, charts: list, by_name: dict, accent: str, auto: bool = False) -> None:
     if not charts:
         return
-    from openpyxl.chart import AreaChart, BarChart, LineChart, PieChart, Reference, ScatterChart, Series
+    from openpyxl.chart import AreaChart, BarChart, DoughnutChart, LineChart, PieChart, Reference, ScatterChart, Series
     placed = {}
     for s, ncols, last, v in charts:
         parts = [p.strip() for p in v.split("|")]
@@ -1208,19 +1406,38 @@ def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
         header = [h or f"Column{i + 1}" for i, h in enumerate(src["header"][:MAX_COLS])]
         hdr = src.get("hdr", 1)                 # table header row (below any banner), set when the sheet was built
         nlast = len(src["rows"]) + hdr
-        xcol = next((i for i, h in enumerate(header, 1) if h.lower() == opts.get("x", header[0]).lower()), None)
-        if xcol is None:
-            _warn(f"chart: x column '{opts.get('x')}' not found on sheet '{src['name']}'" + _cols_hint(header))
-            continue
-        ys = [y.strip() for y in opts.get("y", "").split(",") if y.strip()] or [header[1] if len(header) > 1 else header[0]]
-        ycols = []
-        for y in ys:
-            yi = next((i for i, h in enumerate(header, 1) if h.lower() == y.lower()), None)
-            if yi is None:
-                _warn(f"chart: y column '{y}' not found on sheet '{src['name']}'" + _cols_hint(header))
-                ycols = []
-                break
-            ycols.append(yi)
+        rowmode = opts.get("by", "").lower() == "row" and kind in ("bar", "column", "col", "line", "area")
+        if rowmode:
+            # `by=row | cols=FY2021:FY2025 | rows=Net profit,Assets`: one series per metric ROW, the period headers are the categories
+            c_a, _, c_b = opts.get("cols", "").partition(":")
+            hl = [h.lower() for h in header]
+            c1 = hl.index(c_a.strip().lower()) + 1 if c_a.strip().lower() in hl else None
+            c2 = hl.index(c_b.strip().lower()) + 1 if c_b.strip().lower() in hl else None
+            first = [str(r[0]).strip().lower() if r else "" for r in src["rows"]]
+            rws, bad = [], []
+            for lab in [x.strip() for x in opts.get("rows", "").split(",") if x.strip()]:
+                (rws if lab.lower() in first else bad).append(lab)
+            if c1 is None or c2 is None or c2 < c1 or not rws:
+                _warn(f"chart: by=row needs cols=<first period>:<last period> and rows=<metric names> that exist on sheet '{src['name']}'"
+                      + _cols_hint(header))
+                continue
+            for lab in bad:
+                _warn(f"chart: row '{lab}' not found in the first column of sheet '{src['name']}'")
+            xcol, ycols = c1, [hdr + 1 + first.index(lab.lower()) for lab in rws]
+        else:
+            xcol = next((i for i, h in enumerate(header, 1) if h.lower() == opts.get("x", header[0]).lower()), None)
+            if xcol is None:
+                _warn(f"chart: x column '{opts.get('x')}' not found on sheet '{src['name']}'" + _cols_hint(header))
+                continue
+            ys = [y.strip() for y in opts.get("y", "").split(",") if y.strip()] or [header[1] if len(header) > 1 else header[0]]
+            ycols = []
+            for y in ys:
+                yi = next((i for i, h in enumerate(header, 1) if h.lower() == y.lower()), None)
+                if yi is None:
+                    _warn(f"chart: y column '{y}' not found on sheet '{src['name']}'" + _cols_hint(header))
+                    ycols = []
+                    break
+                ycols.append(yi)
         if not ycols:
             continue
         if kind in ("bar", "column", "col"):
@@ -1234,15 +1451,28 @@ def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
             ch = AreaChart()
         elif kind == "pie":
             ch = PieChart()
+        elif kind == "doughnut":
+            ch = DoughnutChart()
+            ch.holeSize = 55
         elif kind == "scatter":
             ch = ScatterChart()
         else:
-            _warn(f"chart: type '{kind}' not supported (bar, column, line, area, pie, scatter)")
+            _warn(f"chart: type '{kind}' not supported (bar, column, line, area, pie, doughnut, scatter)")
             continue
         ch.title = opts.get("title") or None
         ch.width, ch.height = float(opts.get("w", 16)), float(opts.get("h", 8.5))
         cats = Reference(sws, min_col=xcol, min_row=hdr + 1, max_row=nlast)
-        if kind == "scatter":
+        if rowmode:
+            from openpyxl.chart.data_source import StrRef
+            from openpyxl.chart.series import SeriesLabel
+            for r in ycols:
+                se = Series(Reference(sws, min_col=c1, max_col=c2, min_row=r))
+                se.tx = SeriesLabel(strRef=StrRef(f=str(Reference(sws, min_col=1, min_row=r))))
+                ch.series.append(se)
+            from openpyxl.chart.data_source import AxDataSource
+            for se in ch.series:                                 # the period headers are text: a string reference
+                se.cat = AxDataSource(strRef=StrRef(f=str(Reference(sws, min_col=c1, max_col=c2, min_row=hdr))))
+        elif kind == "scatter":
             for yi in ycols:
                 se = Series(Reference(sws, min_col=yi, min_row=hdr, max_row=nlast), Reference(sws, min_col=xcol, min_row=hdr + 1, max_row=nlast),
                             title_from_data=True)
@@ -1253,15 +1483,16 @@ def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
             for yi in ycols:
                 ch.add_data(Reference(sws, min_col=yi, min_row=hdr, max_row=nlast), titles_from_data=True)
             ch.set_categories(cats)
-        if kind != "pie":
-            ch.x_axis.title = opts.get("xlabel") or header[xcol - 1]
-            ch.y_axis.title = opts.get("ylabel") or (header[ycols[0] - 1] if len(ycols) == 1 else None)
+        xt = opts.get("xlabel") or (None if rowmode else header[xcol - 1])
+        yt = opts.get("ylabel") or (None if rowmode else header[ycols[0] - 1] if len(ycols) == 1 else None)
+        if kind not in ("pie", "doughnut"):
+            ch.x_axis.title, ch.y_axis.title = xt, yt
             ch.x_axis.delete = False
             ch.y_axis.delete = False
         if len(ycols) == 1 and kind in ("bar", "column", "col", "line", "area"):
             ch.legend = None
         pal = _chart_palette(accent, 8)
-        if kind == "pie" and ch.series:
+        if kind in ("pie", "doughnut") and ch.series:
             from openpyxl.chart.series import DataPoint
             for i in range(min(len(src["rows"]), 12)):
                 pt = DataPoint(idx=i)
@@ -1286,17 +1517,19 @@ def _add_charts(wb, charts: list, by_name: dict, accent: str) -> None:
             ch.graphical_properties.line.noFill = True
         except Exception:
             pass
-        if "labels" in flags or (kind in ("bar", "column", "col", "pie") and len(src["rows"]) <= 12 and len(ycols) == 1):
+        if "labels" in flags or (kind in ("bar", "column", "col", "pie", "doughnut") and len(src["rows"]) <= 12 and len(ycols) == 1):
             from openpyxl.chart.label import DataLabelList
             ch.dataLabels = DataLabelList()
-            ch.dataLabels.showVal = kind != "pie"
-            ch.dataLabels.showPercent = kind == "pie"
+            ch.dataLabels.showVal = kind not in ("pie", "doughnut")
+            ch.dataLabels.showPercent = kind in ("pie", "doughnut")
             for flag in ("showSerName", "showCatName", "showLegendKey"):
                 setattr(ch.dataLabels, flag, False)
+        if auto:
+            _polish_chart(ch, kind, accent, opts.get("title"), src, ycols, header, flags, xt, yt, opts.get("yfmt") or ("#,##0" if rowmode else None))
         target = wb[s["xname"]]
         at = opts.get("at")
         if not at:
             n = placed.get(s["xname"], 0)
-            at = f"{col_letter(ncols + 2)}{2 + n * 18}"
+            at = f"{col_letter(ncols + 2)}{(s.get('hdr', 1) if auto else 2) + n * 18}"
             placed[s["xname"]] = n + 1
         target.add_chart(ch, at.upper())

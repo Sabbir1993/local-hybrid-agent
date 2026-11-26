@@ -15,6 +15,7 @@ from ..models import (
     AGENT_TIMEOUT_MIN_S,
     AgentLimitsReq,
     AgentSettingsReq,
+    ChatLimitsReq,
     ShellSettingsReq,
     WebSettingsReq,
 )
@@ -149,6 +150,24 @@ async def agent_settings(req: AgentSettingsReq,
             "run_token_budget": agent_cfg.get("run_token_budget")}
 
 
+def _write_effective() -> dict:
+    """What one write_file / append_file call may really carry, per lane, and why (write_file_max_tokens vs twice the chunk
+    the lane can take, which is half of its output cap)."""
+    from core.agent_tools.limits import agent_limit, effective_chunk_tokens, lane_output_cap, write_cap_tokens
+    setting, target = agent_limit("write_file_max_tokens"), agent_limit("chunk_target_tokens")
+    out = {"setting": setting}
+    for lane in ("executor", "main"):
+        cap, chunk, lane_cap = write_cap_tokens(lane), effective_chunk_tokens(lane), lane_output_cap(lane)
+        if cap >= setting:
+            why = "setting"
+        elif lane_cap > 0 and chunk < target:
+            why = f"the {lane} lane output cap"
+        else:
+            why = "twice the chunk target"
+        out[lane] = {"write_cap": cap, "lane_output_cap": lane_cap, "chunk": chunk, "limited_by": why}
+    return out
+
+
 def _limits_view() -> dict:
     from core.agent_tools.limits import (AGENT_LIMITS, CONTEXT_LIMITS, MEMORY_LIMITS, agent_limit, context_limit,
                                          executor_effort_ceiling, memory_limit)
@@ -156,6 +175,7 @@ def _limits_view() -> dict:
     agent_cfg = APP_CONFIG.get("agent") or {}
     mem_cfg = APP_CONFIG.get("memory") or {}
     return {
+        "effective": {"write": _write_effective()},
         "values": {
             **{k: agent_limit(k) for k in AGENT_LIMITS},
             "mirror_to_workspace": bool(agent_cfg.get("mirror_to_workspace", False)),
@@ -254,3 +274,73 @@ async def agent_limits_set(req: AgentLimitsReq,
     audit_log(user, action="agent.limits", resource="agent.limits",
               permission_key="settings.orchestration.configure", detail=changes)
     return {"ok": True, **_limits_view()}
+
+
+@router.get("/control/chat_limits")
+async def chat_limits_get(user: Principal = Depends(require_permission("settings.orchestration.configure"))):
+    """Every chat-mode limit with its value, default, range and help, plus the per-thinking-level matrix."""
+    from core import chat_limits
+    return chat_limits.view()
+
+
+@router.post("/control/chat_limits")
+async def chat_limits_set(req: ChatLimitsReq,
+                          user: Principal = Depends(require_permission("settings.orchestration.configure"))):
+    """Change chat limits. Out-of-range numbers are clamped, unknown keys ignored, a value that is not a number is
+    refused (400). Persisted to config/app.json (chat.*, chat.thinking_budgets, chat.web_budget) and applied live."""
+    from core import chat_limits as cl
+    sent = req.model_dump(exclude_none=True)
+    known = {k: v for k, v in sent.items() if k in cl.CHAT_LIMITS}
+    levels = sent.get("thinking_budgets") if isinstance(sent.get("thinking_budgets"), dict) else {}
+    webb = sent.get("web_budget") if isinstance(sent.get("web_budget"), dict) else {}
+    if not (known or levels or webb):
+        return JSONResponse({"error": "nothing to change"}, status_code=400)
+    try:
+        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        return JSONResponse({"error": f"config/app.json unreadable: {e}"}, status_code=500)
+    chat_cfg = cfg.setdefault("chat", {})
+    changes = {}
+    try:
+        for k, v in known.items():
+            chat_cfg[k] = changes[k] = cl.clamp_value(k, v)
+        if levels:
+            tb = chat_cfg.get("thinking_budgets") if isinstance(chat_cfg.get("thinking_budgets"), dict) else {}
+            for lvl, row in levels.items():
+                if lvl not in cl.LEVELS or not isinstance(row, dict):
+                    continue
+                cur = dict(tb.get(lvl) if isinstance(tb.get(lvl), dict) else cl.DEFAULT_LEVELS[lvl])
+                for f, v in row.items():
+                    if f in cl.LEVEL_FIELDS and v is not None:
+                        if isinstance(v, bool):
+                            raise ValueError(f"{lvl}.{f} is not a number")
+                        lo, hi = cl.LEVEL_FIELDS[f]
+                        cur[f] = changes[f"thinking_budgets.{lvl}.{f}"] = max(lo, min(hi, int(v)))
+                tb[lvl] = cur
+            chat_cfg["thinking_budgets"] = tb
+        if webb:
+            wb = chat_cfg.get("web_budget") if isinstance(chat_cfg.get("web_budget"), dict) else {}
+            for row_name, row in webb.items():
+                if row_name not in cl.WEB_BUDGET_ROWS or not isinstance(row, dict):
+                    continue
+                cur = dict(wb.get(row_name) if isinstance(wb.get(row_name), dict) else {})
+                for t, v in row.items():
+                    if t in cl.WEB_BUDGET_TIERS and v is not None:
+                        if isinstance(v, bool):
+                            raise ValueError(f"{row_name}.{t} is not a number")
+                        lo, hi = cl.WEB_BUDGET_RANGE
+                        cur[t] = changes[f"web_budget.{row_name}.{t}"] = max(lo, min(hi, int(v)))
+                wb[row_name] = cur
+            chat_cfg["web_budget"] = wb
+    except (TypeError, ValueError) as e:
+        return JSONResponse({"error": f"a chat limit must be a number ({e})"}, status_code=400)
+    if not changes:
+        return JSONResponse({"error": "nothing to change"}, status_code=400)
+    try:
+        write_app_config(cfg, CONFIG_FILE)
+    except Exception as e:
+        return JSONResponse({"error": f"config/app.json write failed: {e}"}, status_code=500)
+    APP_CONFIG["chat"] = {**(APP_CONFIG.get("chat") or {}), **chat_cfg}
+    audit_log(user, action="chat.limits", resource="chat.limits",
+              permission_key="settings.orchestration.configure", detail=changes)
+    return {"ok": True, **cl.view()}

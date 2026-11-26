@@ -1,12 +1,14 @@
 """Model text -> tables: pipes without outer pipes, several tables, notes, thousands separators, first-record-as-header."""
 import io
 import unittest
+from unittest import mock
 
 import core.agent_tools  # noqa: F401
 import openpyxl
 
 import core.doc_ops as D
 from core.sheet_engine import tabular
+from core.small_model import APP_CONFIG
 
 MIXED = """Key Highlights:
 - Hercules is currently a secondary sales force automation app
@@ -32,6 +34,17 @@ Reconciliation Time,Avg hours per day,8-10 hrs,3-4 hrs,Daily
 def book(text):
     data, _ = D.create("t.xlsx", text)
     return openpyxl.load_workbook(io.BytesIO(data))
+
+
+def setUpModule():
+    # these tests check raw conversion mechanics (cell positions, sheet lists), so the automatic design layer is off
+    global _autodesign_off
+    _autodesign_off = mock.patch.dict(APP_CONFIG, {"sheet_engine": {"autodesign": False}})
+    _autodesign_off.start()
+
+
+def tearDownModule():
+    _autodesign_off.stop()
 
 
 class Tables(unittest.TestCase):
@@ -99,9 +112,9 @@ class Tables(unittest.TestCase):
         self.assertEqual(ws.max_column, 3)
         self.assertEqual(ws["C3"].value, "5, 6")
 
-    def test_many_tables_cap_at_twenty_sheets(self):
+    def test_many_tables_cap_at_thirty_sheets(self):
         text = "\n\n".join(f"Table {i}\nA | B\n{i} | x" for i in range(30))
-        self.assertLessEqual(len(book(text).sheetnames), 20)
+        self.assertLessEqual(len(book(text).sheetnames), 30)
 
 
 if __name__ == "__main__":

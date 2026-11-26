@@ -64,8 +64,8 @@ def enabled() -> bool:
 
 def _max_chars() -> int:
     try:
-        from .small_model import APP_CONFIG
-        return int((APP_CONFIG.get("chat") or {}).get("sticky_max_tokens", 6000)) * 4
+        from .chat_limits import chat_limit
+        return int(chat_limit("sticky_max_tokens")) * 4
     except Exception:
         return 24000
 

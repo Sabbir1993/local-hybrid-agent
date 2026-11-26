@@ -511,9 +511,10 @@ class Endings(Harness):
 
     def test_the_time_limit_says_time_and_ends_stopped(self):
         async def run_tool(name, args):
+            await asyncio.sleep(1.1)       # the shortest limit is 1 s (chat_limits clamps below that): the tool round outlasts it
             return "fine"
         r = self.turn("tell me a story about a fox", [tool_round("lookup_thing", {"q": "x"}), res("")], cloud=False,
-                      cfg={"run_timeout_s": -1},  # already expired: a fast run can read the same time.time() twice (coarse clock)
+                      cfg={"run_timeout_s": 1},
                       extra=(mock.patch("routes.chat.run.run_tool", run_tool),))
         stop = [d for ev, d in r.events if ev == "budget_stop"][-1]
         self.assertEqual(stop["reason"], "timeout")

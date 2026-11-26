@@ -2,7 +2,7 @@ import json
 import re
 from fastapi import Depends
 from fastapi.responses import JSONResponse
-from core import cloud
+from core import chat_limits, cloud
 from core.agent_library import library_enabled, load_agent_profiles, load_prompt_commands
 from core.agent_tools import get_active_project
 from core.audit import audit_log
@@ -76,15 +76,8 @@ async def capabilities_status(user: Principal = Depends(get_current_user)):
             "deep_max_web_calls": chat_cfg.get("deep_max_web_calls", 12),
             "max_tool_rounds": chat_cfg.get("max_tool_rounds", 12),
             "deep_max_tool_rounds": chat_cfg.get("deep_max_tool_rounds", 20),
-            "soft_chars": chat_cfg.get("web_soft_chars", 6000),
-            "thinking_budgets": chat_cfg.get("thinking_budgets", {
-                "none": {"tool_calls": 0, "token_budget": 6000, "max_rounds": 0},
-                "low": {"tool_calls": 4, "token_budget": 8000, "max_rounds": 4},
-                "medium": {"tool_calls": 8, "token_budget": 12000, "max_rounds": 12},
-                "high": {"tool_calls": 16, "token_budget": 16000, "max_rounds": 20},
-                "extra": {"tool_calls": 25, "token_budget": 20000, "max_rounds": 30},
-                "deep": {"tool_calls": 35, "token_budget": 25000, "max_rounds": 40},
-            }),
+            "soft_chars": chat_limits.chat_limit("web_soft_chars"),
+            "thinking_budgets": chat_limits.level_matrix(),      # edited in Settings -> Chat limits
             "tools": [{"name": t.name, "description": t.schema["function"]["description"][:120]}
                       for t in registry.list(source="web")],
         },

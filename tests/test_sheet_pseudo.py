@@ -1,12 +1,14 @@
 """One csv-ish text with `SheetN,Title` sections becomes a workbook with real sheets (what the model meant)."""
 import io
 import unittest
+from unittest import mock
 
 import core.agent_tools  # noqa: F401
 import openpyxl
 
 import core.doc_ops as D
 from core.sheet_engine import pseudo
+from core.small_model import APP_CONFIG
 
 TEXT = """Hercules TAP - Bangladesh
 Sheet1,Executive Summary
@@ -28,6 +30,17 @@ Slide Title,Hercules TAP - Bangladesh Market Expansion
 Key Points for Board:
 • Current Hercules has strong core SFA features
 """
+
+
+def setUpModule():
+    # these tests check raw conversion mechanics (cell positions, sheet lists), so the automatic design layer is off
+    global _autodesign_off
+    _autodesign_off = mock.patch.dict(APP_CONFIG, {"sheet_engine": {"autodesign": False}})
+    _autodesign_off.start()
+
+
+def tearDownModule():
+    _autodesign_off.stop()
 
 
 class Pseudo(unittest.TestCase):

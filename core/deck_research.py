@@ -16,6 +16,7 @@ import re
 from typing import Optional
 
 from . import reasoning
+from .chat_limits import chat_limit
 
 DEFAULT_CALLS = 10
 BUILD_TURNS = 12          # tool rounds kept for doc_create / doc_append after the research
@@ -26,10 +27,7 @@ def _cfg(app_cfg: Optional[dict]) -> dict:
 
 
 def calls(app_cfg: Optional[dict]) -> int:
-    try:
-        return max(0, min(40, int(_cfg(app_cfg).get("deck_research_calls", DEFAULT_CALLS))))
-    except (TypeError, ValueError):
-        return DEFAULT_CALLS
+    return chat_limit("deck_research_calls", app_cfg or {})
 
 
 def effort_for(effort: Optional[str], app_cfg: Optional[dict]) -> Optional[str]:
@@ -62,15 +60,8 @@ def build_limits(app_cfg: Optional[dict], phase: str) -> dict:
     and a hard cap on the tokens of one turn (a 3-slide doc_append is ~1.5k)."""
     if phase != "build":
         return {"repeat_penalty": None, "max_tokens": None}
-    chat = _cfg(app_cfg)
-    try:
-        rp = float(chat.get("deck_repeat_penalty", 1.0))
-    except (TypeError, ValueError):
-        rp = 1.0
-    try:
-        mt = int(chat.get("deck_max_tokens", 8000))
-    except (TypeError, ValueError):
-        mt = 8000
+    rp = chat_limit("deck_repeat_penalty", app_cfg or {})
+    mt = chat_limit("deck_max_tokens", app_cfg or {})
     return {"repeat_penalty": rp if rp > 0 else None, "max_tokens": mt if mt > 0 else None}
 
 
@@ -86,12 +77,7 @@ def clamp_tokens(requested, cap: Optional[int]):
 def web_cap(phase: str, app_cfg: Optional[dict] = None) -> tuple:
     """(soft_after, soft_chars) for trimming web results: a deck's research keeps its context small, because every later
     turn (and every slide written) is processed on top of it."""
-    soft_chars = 6000
-    if app_cfg:
-        try:
-            soft_chars = int((app_cfg.get("chat") or {}).get("web_soft_chars", 6000))
-        except (TypeError, ValueError):
-            soft_chars = 6000
+    soft_chars = chat_limit("web_soft_chars", app_cfg or {})
     return (1, 4500) if phase == "build" else (6, soft_chars)
 
 
@@ -137,11 +123,7 @@ def topic_of(request: str) -> str:
 def project_limits(app_cfg: Optional[dict]) -> dict:
     """Sampling limits for a website project turn: same as a deck build (penalty 1.0 - HTML / CSS / JS are full of repeats) and a
     cap on one turn (a 150-line piece is ~3k tokens; a loop used to run 25k before the guard cut it)."""
-    chat = _cfg(app_cfg)
-    try:
-        mt = int(chat.get("project_max_tokens", 6000))
-    except (TypeError, ValueError):
-        mt = 6000
+    mt = chat_limit("project_max_tokens", app_cfg or {})
     return {"repeat_penalty": 1.0, "max_tokens": mt if mt > 0 else None}
 
 

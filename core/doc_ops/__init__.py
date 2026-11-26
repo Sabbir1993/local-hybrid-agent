@@ -215,7 +215,8 @@ def normalize_ops(ops) -> list[dict]:
 
 
 _SHEET_OUTLINE_OPS = ("add_outline_sheet", "add_chart", "set_format", "add_highlight", "add_scale", "add_databar", "add_validation", "set_total",
-                      "set_theme", "set_freeze", "set_table", "set_filter", "add_note", "add_column")
+                      "set_theme", "set_freeze", "set_table", "set_filter", "add_note", "add_column", "add_dashboard", "set_banner",
+                      "set_subtitle", "set_input", "add_merge", "set_color", "add_icons", "set_style", "set_auto")
 
 
 def edit(data: bytes, name: str, ops, source_spec: Optional[str] = None) -> EditOutcome:
@@ -238,6 +239,8 @@ def edit(data: bytes, name: str, ops, source_spec: Optional[str] = None) -> Edit
         if not all(sheet_edit.is_outline_op(o) for o in ops):
             raise DocOpError("restyling ops (" + ", ".join(sheet_edit.OUTLINE_OPS[:4]) + ", ...) cannot be mixed with cell ops "
                              "(set_cell, set_formula, ...) in one call - make two calls")
+        from ..sheet_engine import build as _sb0
+        _sb0.take_autodesign_report()          # only what this rebuild adds is reported
         try:
             new_data, new_outline, changes = sheet_edit.edit(source_spec, ops)
         except (sheet_edit.EditError, BuildError) as e:
@@ -246,7 +249,9 @@ def edit(data: bytes, name: str, ops, source_spec: Optional[str] = None) -> Edit
             raise DocOpError("the edited document would contain a new payment card number (PCI DSS)")
         from ..sheet_engine import build as _sb
         skipped = [f"skipped: {w}" for w in _sb.take_warnings()]
-        return EditOutcome(new_data, changes, ["workbook rebuilt from its outline (formats, charts and rules included)"] + skipped, new_outline)
+        design = _sb.autodesign_note().strip()
+        return EditOutcome(new_data, changes, ["workbook rebuilt from its outline (formats, charts and rules included)"] + skipped
+                           + ([design] if design else []), new_outline)
     mod = EDITABLE.get(ext)
     if mod is None:
         raise DocOpError(f"{ext} files cannot be edited (have: {', '.join(sorted(DOC_EXTS))})")
@@ -325,6 +330,7 @@ def create(name: str, content: str, template: Optional[bytes] = None,
     if ext == ".xlsx":
         from ..sheet_engine import build as sheet_build
         from ..sheet_engine import pseudo
+        sheet_build.take_autodesign_report()     # a stale report from an earlier build must not be shown for this one
         as_outline = pseudo.to_outline(content)           # "Sheet2,Cost Analysis" sections in one csv -> real sheets
         if as_outline:
             content = as_outline

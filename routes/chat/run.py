@@ -24,7 +24,8 @@ from core.registry import registry
 from core.web_tools import register_web_tools, tool_web_search, tool_web_fetch, tool_web_search_images
 from core import web_search as web_search_mod
 from core.agent_tools import tool_write_file_common, CHAT_WRITE_FILE_SCHEMA, _common_resolve
-from core.request_context import run_in_executor_ctx, set_tool_allowlist, tool_allowed
+from core.request_context import (reset_current_lane, run_in_executor_ctx, set_current_lane, set_tool_allowlist,
+                                  tool_allowed)
 from core.doc_tools import (CHAT_IMPLS as _DOC_CHAT_IMPLS, DOC_APPEND_SCHEMA, DOC_CREATE_SCHEMA, DOC_EDIT_SCHEMA,
                             DOC_INSPECT_SCHEMA, tool_doc_inspect_common)
 from core.agent_loop import doc_redirect as _doc_redirect
@@ -51,7 +52,7 @@ from core.monitor import (
 from core.knowledge_access import allowed_source_ids_for, cloud_ok_ids, hits_need_local, kb_local_only, set_kb_cloud_blocked
 from core.db import db_record_request
 from .. import common
-from core import deck_research, reasoning
+from core import chat_limits, deck_research, reasoning
 from ..common import _llm_chat_stream
 from ..common.sampling_extra import sampler_extra
 
@@ -94,7 +95,7 @@ from .file_intent import (
     wants_file_output,
     serves_brief_card,
     ASK_BLOCKED_TOOLS,
-    CHAT_CUT_CALL_ERROR,
+    chat_cut_call_error,
     KB_TOOL_NAMES,
 )
 from core.agent_tools.project_files import (open_project_note, plan_items, set_scope as set_project_scope, PROJECT_MANUAL, PROJECT_SCHEMAS, PROJECT_TOOL_NAMES, SINGLE_PAGE_MANUAL, project_wanted, single_page_wanted, finish_result_ok,
@@ -536,22 +537,13 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     # Deep research; mapped per local/cloud target in common._llm_chat_stream_raw
     effort = reasoning.resolve(req.reasoning_effort, deep)
 
-    # 2D Thinking-Wise Budget Matrix resolution (None, Low, Medium, High, Extra, Deep)
+    # Thinking-level matrix (None..Extra, Deep): read through core/chat_limits so out-of-range config values are clamped
     chat_cfg = APP_CONFIG.get("chat") or {}
-    thinking_budgets = chat_cfg.get("thinking_budgets") or {}
     budget_key = "deep" if deep else (effort or "medium")
-    default_matrix = {
-        "none": {"tool_calls": 0, "token_budget": 6000, "max_rounds": 0},
-        "low": {"tool_calls": 4, "token_budget": 8000, "max_rounds": 4},
-        "medium": {"tool_calls": 8, "token_budget": 12000, "max_rounds": 12},
-        "high": {"tool_calls": 16, "token_budget": 16000, "max_rounds": 20},
-        "extra": {"tool_calls": 25, "token_budget": 20000, "max_rounds": 30},
-        "deep": {"tool_calls": 35, "token_budget": 25000, "max_rounds": 40},
-    }
-    b_row = thinking_budgets.get(budget_key) or default_matrix.get(budget_key, {"tool_calls": 8, "token_budget": 12000, "max_rounds": 12})
-    level_tool_calls = b_row.get("tool_calls", 8)
-    level_token_budget = b_row.get("token_budget", 12000)
-    level_max_rounds = b_row.get("max_rounds", 12)
+    b_row = chat_limits.level_row(budget_key)
+    level_tool_calls = b_row["tool_calls"]
+    level_token_budget = b_row["token_budget"]
+    level_max_rounds = b_row["max_rounds"]
     if image_find and not level_tool_calls:
         level_tool_calls = 2             # thinking "None" still fetches the pictures asked for: one search + the answer
         level_max_rounds = max(int(level_max_rounds or 0), 3)
@@ -921,11 +913,11 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 max_turns = deck_research.turns_for(max_web_calls, max_turns)      # research rounds + the build rounds
     if project_build and chat_tools and level_tool_calls != 0:
         # a site is built a section per call (skeleton, css, js, a dozen sections, finish): 12-15 rounds would stop it half done
-        max_turns = max(max_turns, int(chat_cfg.get("project_max_rounds", 40)))
+        max_turns = max(max_turns, chat_limits.chat_limit("project_max_rounds"))
     if chat_tools and level_tool_calls != 0 and (longdoc_build or explicit_ext in (".xlsx", ".docx", ".pptx")):
         # a workbook, report or deck is built in pieces (create, then several edits / appends, then checks): the ordinary
         # 12-15 rounds stop it half done, and the model then has nothing left to say where it stands
-        max_turns = max(max_turns, int(chat_cfg.get("doc_max_rounds", 24)))
+        max_turns = max(max_turns, chat_limits.chat_limit("doc_max_rounds"))
     if deep:
         sys_parts.append(
             "DEEP RESEARCH MODE:\n"
@@ -959,7 +951,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
     sampler_fields = sampler_fields or None
     if (project_build or pdf_build or doc_write_turn) and not cloud_main and req.temperature is not None:
         # writing a file wants steady output: a high panel temperature turns repeated markup into near-miss spellings
-        req.temperature = min(float(req.temperature), float((APP_CONFIG.get("chat") or {}).get("build_temperature", 0.3)))
+        req.temperature = min(float(req.temperature), float(chat_limits.chat_limit("build_temperature")))
     # Keep the start of the prompt the same from turn to turn so the server reuses what it already read
     # (core/prompt_sticky.py): per-turn text goes to the end of the user's message, manuals and document tools stay once
     # used, tools keep a stable order. Off (chat.stable_prefix false) = everything in the system message, as before.
@@ -1036,6 +1028,8 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
         research_from, research_answered = len(msgs), False
         speed = SpeedTally()        # llama-server's own generation / prompt speed for the badge (routes/chat/speed.py)
         t0 = time.time()
+        # chat writes come from the MAIN model: size the per-call write cap (common_writer, sse_stream) to the main lane, not the executor's
+        lane_token = set_current_lane("main")
         try:
             chat_rid = monitor_begin("chat/run", True, n_msgs=len(msgs),
                                      model=clean_model_name, source=model_source, provider=model_provider)
@@ -1127,7 +1121,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 if turn >= turn_limit:
                     budget_hit = True
                     break
-                run_cap = float(chat_cfg.get("run_timeout_s", 1800) or 0)
+                run_cap = float(chat_limits.chat_limit("run_timeout_s"))
                 if run_cap and turn and time.time() - t0 > run_cap:
                     run_end_reason = "timeout"      # chat had no wall-clock stop: the tool-free wrap-up below answers
                     budget_hit = True
@@ -1402,14 +1396,14 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                 # The reply hit the length limit mid-text (a long page, cut inside the code block): carry on in the same message
                 # instead of leaving it cut off for the user to ask again (and have the model start over).
                 if (finish_reason == "length" and not tool_calls and content.strip() and not cloud_main
-                        and auto_continues < int(chat_cfg.get("auto_continue", 3))):
+                        and auto_continues < chat_limits.chat_limit("auto_continue")):
                     auto_continues += 1
                     cont_prefix = content
                     msgs.append({"role": "assistant", "content": _new(content) or _NO_REPLY})
                     msgs.append({"role": "user", "content": prompt_scope.CONTINUE_CUT_NOTE.format(tail=content[-240:])})
                     if turn >= turn_limit - 1:
                         turn_limit += 1
-                    print(f"[chat] reply cut by the length limit; continuing it ({auto_continues}/{int(chat_cfg.get('auto_continue', 3))})",
+                    print(f"[chat] reply cut by the length limit; continuing it ({auto_continues}/{chat_limits.chat_limit('auto_continue')})",
                           file=sys.stderr)
                     continue
 
@@ -1850,7 +1844,7 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
 
                     try:
                         # chat.repeat_call_limit: how many identical calls are allowed before the next one is refused
-                        if repeat_count >= max(1, int(chat_cfg.get("repeat_call_limit", 2) or 2)):
+                        if repeat_count >= chat_limits.chat_limit("repeat_call_limit"):
                             turn_limit = min(turn_limit, turn + 1)
                             what = f"`{target_cand}`" if target_cand else "the same arguments"
                             res_str = (f"error: `{t_name}` has been called repeatedly with {what}. "
@@ -1859,12 +1853,12 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
                             # the stream guard cut this call while it was looping: never run it, ask once more, then stop
                             runaway_hits += 1
                             res_str = runaway_message(t_name, args)
-                            if runaway_hits > int(chat_cfg.get("runaway_retries", 2)):
+                            if runaway_hits > chat_limits.chat_limit("runaway_retries"):
                                 turn_limit = turn + 1
                                 res_str += ". Stop retrying: summarise what is done so far in plain text"
                         elif args.get(INVALID_JSON_KEY):
                             # a file call whose JSON was cut off by the output limit: running it would save an empty or partial file
-                            res_str = CHAT_CUT_CALL_ERROR
+                            res_str = chat_cut_call_error(args.get("path") or args.get("file") or "")
                         elif project_build and t_name in ("write_file", "doc_create", "doc_append", "doc_inspect", "doc_edit"):
                             res_str = ("error: this is a website / HTML project: write each planned file with project_write (project_append to "
                                        "extend it) and finish with project_finish. Do not use " + t_name + ".")
@@ -2216,6 +2210,10 @@ async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_us
             yield f"event: delta\ndata: {json.dumps({'text': friendly_chat_error(e) + (chr(10) * 2 + _links if _links else '')})}\n\n"
             yield f"event: done\ndata: {json.dumps({'state': 'failed', 'note': type(e).__name__})}\n\n"
         finally:
+            try:
+                reset_current_lane(lane_token)
+            except ValueError:       # closed from another context: that context's lane is not ours to restore
+                pass
             runs.end(run_id, run_end_state, run_end_reason, step=turn, resumable=True if run_end_state == "stopped" else None)
             if getattr(req, "session_id", None):
                 try:

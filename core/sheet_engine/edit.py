@@ -4,15 +4,17 @@ possible. Cell-level ops (set_cell, set_formula, set_range, append_rows ...) sta
 after one of them the file no longer matches its outline, so these ops are refused until the workbook is rebuilt.
 
 Ops: add_chart, set_format, add_highlight, add_scale, add_databar, add_validation, set_total, set_theme, set_freeze,
-set_table, set_filter, add_note, add_column.
+set_table, set_filter, add_note, add_column, add_dashboard, set_banner, set_subtitle, set_input, add_merge, set_color,
+add_icons, set_style, set_auto.
 """
 import re
 from typing import Optional
 
-from .build import BuildError, _SHEET_RX, _split_row, build, is_outline, parse
+from .build import THEMES, BuildError, _DASH_RX, _SHEET_RX, _split_row, build, is_outline, parse
 
 OUTLINE_OPS = ("add_outline_sheet", "add_chart", "set_format", "add_highlight", "add_scale", "add_databar", "add_validation", "set_total",
-               "set_theme", "set_freeze", "set_table", "set_filter", "add_note", "add_column")
+               "set_theme", "set_freeze", "set_table", "set_filter", "add_note", "add_column", "add_dashboard", "set_banner", "set_subtitle",
+               "set_input", "add_merge", "set_color", "add_icons", "set_style", "set_auto")
 
 
 class EditError(ValueError):
@@ -24,8 +26,8 @@ def is_outline_op(op: dict) -> bool:
 
 
 def _sections(lines: list) -> list:
-    """[(sheet name, first line index, end index)] for each `## Sheet:` block (a single unnamed sheet counts as 'Sheet1')."""
-    heads = [(i, _SHEET_RX.match(l).group(1)) for i, l in enumerate(lines) if _SHEET_RX.match(l)]
+    """[(sheet name, first line index, end index)] for each `## Sheet:` / `## Dashboard:` block (a single unnamed sheet counts as 'Sheet1')."""
+    heads = [(i, (_SHEET_RX.match(l) or _DASH_RX.match(l)).group(1)) for i, l in enumerate(lines) if _SHEET_RX.match(l) or _DASH_RX.match(l)]
     if not heads:
         first = next((i for i, l in enumerate(lines) if l.lstrip().startswith("|")), 0)
         return [("Sheet1", first, len(lines))]
@@ -47,6 +49,38 @@ def _append_directive(lines: list, sec: tuple, line: str) -> None:
     while end > sec[1] and not lines[end - 1].strip():
         end -= 1
     lines.insert(end, line)
+
+
+def _set_directive(lines: list, sec: tuple, key: str, value: str) -> None:
+    """Replace the sheet's existing `key:` line (the first one) or append a new one."""
+    rx = re.compile(rf"^\s*{key}\s*:", re.I)
+    idx = next((i for i in range(sec[1] + 1, sec[2]) if rx.match(lines[i])), None)
+    if idx is None:
+        _append_directive(lines, sec, f"{key}: {value}")
+    else:
+        lines[idx] = f"{key}: {value}"
+
+
+def _drop_directive(lines: list, sec: tuple, key: str) -> int:
+    rx = re.compile(rf"^\s*{key}\s*:", re.I)
+    gone = [i for i in range(sec[1] + 1, sec[2]) if rx.match(lines[i])]
+    for i in reversed(gone):
+        del lines[i]
+    return len(gone)
+
+
+def _wb_line(lines: list, key: str, value: Optional[str]) -> None:
+    """Set (value) or remove (None) a workbook-level `key: value` line, which sits above the first sheet."""
+    first = next((i for i, l in enumerate(lines) if _SHEET_RX.match(l) or _DASH_RX.match(l)), len(lines))
+    idx = next((i for i in range(first) if re.match(rf"^\s*{key}\s*:", lines[i], re.I)), None)
+    if value is None:
+        if idx is not None:
+            del lines[idx]
+    elif idx is not None:
+        lines[idx] = f"{key}: {value}"
+    else:
+        at = next((i + 1 for i, l in enumerate(lines[:first]) if re.match(r"^\s*#\s+", l)), 0)
+        lines.insert(at, f"{key}: {value}")
 
 
 def _need(op: dict, key: str) -> str:
@@ -77,13 +111,34 @@ def apply_outline_ops(outline: str, ops: list) -> tuple:
             continue
         if kind == "set_theme":
             theme = _need(op, "theme").lower()
-            idx = next((i for i, l in enumerate(lines) if re.match(r"^\s*theme\s*:", l, re.I)), None)
-            if idx is not None:
-                lines[idx] = f"theme: {theme}"
-            else:
-                at = next((i + 1 for i, l in enumerate(lines) if re.match(r"^\s*#\s+", l)), 0)
-                lines.insert(at, f"theme: {theme}")
+            if theme not in THEMES:
+                raise EditError(f"set_theme: unknown theme '{theme}' (themes: {', '.join(THEMES)})")
+            _wb_line(lines, "theme", theme)
             changes.append(f"theme set to {theme}")
+            continue
+        if kind == "set_style":
+            val = _need(op, "value").lower()
+            if val not in ("plain", "auto"):
+                raise EditError("set_style: value must be plain (no automatic design) or auto")
+            _wb_line(lines, "style", "plain" if val == "plain" else None)
+            changes.append("automatic design turned off (style: plain)" if val == "plain" else "automatic design turned on")
+            continue
+        if kind == "add_dashboard":
+            name, body = _need(op, "name"), _need(op, "content")
+            body_lines = [ln for ln in body.strip().splitlines() if ln.strip()]
+            if not any(re.match(r"^\s*(kpi|chart)\s*:", ln, re.I) for ln in body_lines):
+                raise EditError("add_dashboard: content needs kpi: and/or chart: lines (kpi: Total = =SUM(Sales!C2:C99) | format=currency:BDT; "
+                                "chart: bar | source=Sales | x=Region | y=Revenue), plus optional title: and note:")
+            same = next((x for x in _sections(lines) if x[0].lower() == name.lower()), None)
+            if same and not _DASH_RX.match(lines[same[1]]):
+                raise EditError(f"add_dashboard: a data sheet named '{name}' already exists")
+            if same:                                          # an explicit dashboard of that name is replaced
+                lines[same[1]:same[2]] = [f"## Dashboard: {name}"] + body_lines + [""]
+            else:
+                while lines and not lines[-1].strip():
+                    lines.pop()
+                lines += ["", f"## Dashboard: {name}"] + body_lines
+            changes.append(f"dashboard '{name}' {'replaced' if same else 'added'}")
             continue
         sec = _find(lines, sheet)
         label = f"{sec[0]}: "
@@ -143,6 +198,40 @@ def apply_outline_ops(outline: str, ops: list) -> tuple:
                 n += 1
                 lines[i] = "| " + " | ".join(cells + [formula.replace("{r}", str(n + 1))]) + " |"
             changes.append(label + f"column '{name}' added ({n} rows)")
+        elif kind in ("set_banner", "set_subtitle"):
+            key = kind[4:]
+            _set_directive(lines, sec, key, _need(op, "text"))
+            changes.append(label + f"{key} set")
+        elif kind == "set_input":
+            cols = op.get("columns")
+            cols = ", ".join(str(c).strip() for c in cols) if isinstance(cols, list) else _need(op, "columns")
+            _append_directive(lines, sec, f"input: {cols}")
+            changes.append(label + f"input cells: {cols}")
+        elif kind == "add_merge":
+            rng = str(op.get("range") or "").strip()
+            if not re.fullmatch(r"[A-Za-z]{1,3}\d+:[A-Za-z]{1,3}\d+", rng):
+                raise EditError("add_merge: range like A1:D1 required (text is the optional title put in the merged cell)")
+            text = str(op.get("text") or "").strip().replace('"', "'")
+            _append_directive(lines, sec, f'merge: "{text}"={rng.upper()}' if text else f"merge: {rng.upper()}")
+            changes.append(label + f"merged {rng.upper()}")
+        elif kind == "set_color":
+            target = _need(op, "target")
+            parts = [f"fill={op['fill']}" if op.get("fill") else "", f"font={op['font']}" if op.get("font") else ""]
+            if not any(parts):
+                raise EditError("set_color: give fill and/or font (a colour name or hex such as FFF2CC)")
+            _append_directive(lines, sec, f"color: {target} " + " ".join(p for p in parts if p))
+            changes.append(label + f"colour on {target}")
+        elif kind == "add_icons":
+            col = _need(op, "column")
+            _append_directive(lines, sec, f"icons: {col}")
+            changes.append(label + f"trend icons on {col}")
+        elif kind == "set_auto":
+            on = op.get("on", True)
+            on = on if isinstance(on, bool) else str(on).strip().lower() not in ("false", "0", "off", "no")
+            _drop_directive(lines, sec, "auto")
+            if not on:
+                _append_directive(lines, sec, "auto: off")
+            changes.append(label + ("automatic design on" if on else "automatic design off"))
         else:
             raise EditError(f"unknown workbook op '{kind}'")
     return "\n".join(lines), changes

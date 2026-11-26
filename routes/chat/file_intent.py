@@ -307,10 +307,23 @@ def wants_file_output(query: str) -> bool:
 KB_TOOL_NAMES = ("search_knowledge_base", "kb_find_mentions", "kb_query", "kb_sql")
 
 
+_CUT_CALL_HEAD = ("error: this write_file call was cut off by the output limit (its arguments were not complete JSON), so nothing was saved. "
+                  "Write a smaller file: one file per call, and keep each under about 250 lines. ")
 CHAT_CUT_CALL_ERROR = (
-    "error: this write_file call was cut off by the output limit (its arguments were not complete JSON), so nothing was saved. "
-    "Write a smaller file: one file per call, and keep each under about 250 lines. For a website, save a compact index.html "
+    _CUT_CALL_HEAD + "For a website, save a compact index.html "
     "(CSS and JS inline or in separate short files) instead of one huge page, then give the [DOWNLOAD: ...] link.")
+
+
+def chat_cut_call_error(path: str = "") -> str:
+    """The refusal for a cut-off write_file call, fitted to the file: a workbook / Word / slide / PDF is built in pieces and
+    stays that format; only a web page (or an unknown file) is told to save a compact index.html."""
+    from pathlib import PurePosixPath
+    ext = PurePosixPath(str(path or "").replace("\\", "/")).suffix.lower()
+    if not ext or ext in (".html", ".htm"):
+        return CHAT_CUT_CALL_ERROR
+    from core.agent_tools.limits import document_split_advice
+    advice = document_split_advice(path)
+    return _CUT_CALL_HEAD + (advice or "Split it into smaller parts, then give the [DOWNLOAD: ...] link.")
 
 
 # nothing that creates or changes a file is offered while the ask-first card is still to be answered

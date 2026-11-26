@@ -32,6 +32,16 @@ const AGENT_LIMIT_FIELDS = [
   ]],
 ];
 
+// what one write really carries per lane (the setting is lowered to twice the chunk the lane can generate)
+function agentWriteEffHtml(d) {
+  const eff = (d.effective || {}).write;
+  if (!eff) return '';
+  const why = { setting: 'your setting', 'twice the chunk target': 'limited by twice the target chunk size' };
+  const line = (label, e) => `<div>${label}: <b>${e.write_cap}</b> <span class="dim">(${esc(why[e.limited_by] || 'limited by ' + e.limited_by)})</span></div>`;
+  return `<div id="al-write-eff" style="margin:3px 0 0 236px; font-size:10px;">
+    ${line('Effective in agent steps on the executor', eff.executor)}${line('Effective in chat / main lane', eff.main)}</div>`;
+}
+
 function agentLimitsHtml(d) {
   const v = d.values, r = d.ranges, inp = 'width:94px; margin:0; background:var(--bg-input); color:var(--text); border:1px solid var(--border); border-radius:7px; padding:6px 10px; font-size:12px; box-sizing:border-box; text-align:right;';
   const sel = ([key, label, help]) => `
@@ -42,12 +52,13 @@ function agentLimitsHtml(d) {
       </select>
       <span class="dim" style="font-size:9.5px;">${esc(help)}</span>
     </div>`;
+  const effHtml = (key) => key === 'write_file_max_tokens' ? agentWriteEffHtml(d) : '';
   const row = ([key, label, help]) => key[0] === '@' ? sel([key, label, help]) : `
     <div style="display:flex; align-items:center; gap:6px; margin-top:6px; flex-wrap:wrap;" title="${esc(help)}">
       <span style="min-width:230px;">${esc(label)}</span>
       <input type="number" class="al-in" data-key="${key}" min="${r[key][0]}" max="${r[key][1]}" value="${v[key]}" style="${inp}">
       <span class="dim" style="font-size:9.5px;">${r[key][0]}–${r[key][1]}${help ? ' · ' + esc(help) : ''}</span>
-    </div>`;
+    </div>${effHtml(key)}`;
   const chk = (key, label, help) => `
     <label style="display:flex; align-items:center; gap:6px; margin-top:6px;" title="${esc(help)}">
       <input type="checkbox" class="al-chk" data-key="${key}" ${v[key] ? 'checked' : ''}>
@@ -94,6 +105,8 @@ function wireAgentLimits(box) {
       if (!r.ok) throw new Error(j.error || j.detail || r.status);
       box.querySelectorAll('#agent-limits-box .al-in').forEach(i => { if (j.values[i.dataset.key] != null) i.value = j.values[i.dataset.key]; });
       box.querySelector('#al-compaction').value = Math.round(j.values.compaction_threshold * 100);
+      const effBox = box.querySelector('#al-write-eff');
+      if (effBox && j.effective) effBox.outerHTML = agentWriteEffHtml(j);
       toast('Agent limits saved ✓ (applies to the next run)');
     } catch (e) { toast('Save failed: ' + e.message, true); }
   };

@@ -12,6 +12,7 @@ import core.doc_ops as D
 from core.sheet_engine import edit as se
 
 BASE = """# Sales
+style: plain
 ## Sheet: Assumptions
 | Item | Value |
 |---|---|

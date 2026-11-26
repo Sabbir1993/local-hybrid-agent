@@ -127,6 +127,23 @@ const CAP_HELP = {
     ],
     notes: [['Continue', 'A stopped run keeps its work. Press Continue to carry on from where it stopped.']],
   },
+  chat: {
+    title: 'Chat limits',
+    lead: 'Every limit of Chat mode in one place: tool rounds, tokens and web calls per thinking level, and the caps for builds.',
+    flow: [
+      ['You pick a level', 'in the prompt bar', 'you'],
+      ['Level row applies', 'tool calls, rounds, tokens', 'guard'],
+      ['Main model answers', 'tools run in rounds', 'main'],
+      ['Turn ends', 'at the first limit reached', 'cpu'],
+    ],
+    steps: [
+      ['Token budget', 'The output limit of one turn for that level. Chat & Sampling "max tokens", when set, overrides it; thinking counts against it.'],
+      ['Max tool calls and rounds', 'How many tool / web calls and model-tool rounds one turn may use. 0 tool calls means a direct answer with no tools.'],
+      ['Web calls by coverage', 'When the Knowledge Base already covers the question, fewer web calls are allowed.'],
+      ['Builds', 'Websites, workbooks, reports and decks get their own round and token caps.'],
+    ],
+    notes: [['Agent mode', 'Agent runs use Task limits instead. Writes made in chat are sized to the main lane output cap.']],
+  },
   library: {
     title: 'Agent library',
     lead: 'Shared agent profiles and prompt commands for the whole organisation.',

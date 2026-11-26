@@ -87,7 +87,7 @@ async def _create(args: dict, location: str) -> str:
     content, images, pic_note = await prepare_build(ext_, content, uid, template=bool(template),
                                                     partial=bool(args.get("total")))
     data, spec = doc_ops.create(name, _interim(content, not args.get("total")), template=template, images=images)
-    spec = content
+    spec = (spec or content) if ext_ == ".xlsx" else content          # the outline the workbook was built from (not the raw table text)
     if location == "device":
         dev_uid, _ws = require_device_workspace()
         target = _ws_resolve(name)
@@ -285,7 +285,7 @@ def _layout_note(ext: str, data: bytes, markdown: str = "") -> str:
             findings = lint_xlsx(data)
             qa_note = f" [QA Notice: {len(findings)} issue(s): {'; '.join(findings[:2])}]" if findings else ""
             from ..sheet_engine import build as sheet_build, calc
-            return ((calc.check_report(calc.calculate(data)) + sheet_build.warnings_note()).strip() + qa_note).strip()
+            return ((calc.check_report(calc.calculate(data)) + sheet_build.warnings_note() + sheet_build.autodesign_note()).strip() + qa_note).strip()
         except Exception:
             return ""
     if ext == ".docx":

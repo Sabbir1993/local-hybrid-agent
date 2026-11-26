@@ -374,7 +374,7 @@ CHAT_WRITE_FILE_SCHEMA = {
                 },
                 "content": {
                     "type": "string",
-                    "description": "The complete file content to write. For spreadsheets (.xlsx, .csv), provide formatted CSV rows or markdown table rows. For a .pptx deck, write markdown: a '# Title' line per slide, bullet lines under it, and slides separated by a line containing only '---'. For .docx, plain markdown."
+                    "description": "The complete file content to write. For .xlsx, write '## Sheet: Name' headings with markdown pipe tables (never CSV lines); for .csv, CSV rows. For a .pptx deck, write markdown: a '# Title' line per slide, bullet lines under it, and slides separated by a line containing only '---'. For .docx, plain markdown."
                 }
             },
             "required": ["path", "content"]

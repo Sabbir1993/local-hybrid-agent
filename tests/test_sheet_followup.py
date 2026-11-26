@@ -10,6 +10,7 @@ from routes.chat import delivery as dv
 from routes.chat import file_intent as fi
 
 BOOK = """# Break-even
+style: plain
 ## Sheet: Costs
 | Item | Cost (BDT) | Month |
 |---|---|---|

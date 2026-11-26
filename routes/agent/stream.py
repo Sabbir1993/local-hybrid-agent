@@ -95,6 +95,7 @@ from core.agent_loop import (
     safe_parse_and_repair_args,
     MAX_CUTOFF_RETRIES,
     CUT_CALL_NOTICE,
+    cut_call_notice,
     CUT_TEXT_NOTICE,
     was_cut_off,
     _extract_text_tool_calls,
@@ -1120,7 +1121,7 @@ async def run_agent_stream(req, user, ctx):
                         # a call cut off mid-arguments is dropped whole, never repaired and run
                         if content.strip():
                             msgs.append({"role": "assistant", "content": content})
-                        msgs.append({"role": "user", "content": CUT_CALL_NOTICE})
+                        msgs.append({"role": "user", "content": cut_call_notice(tool_calls)})
                     else:
                         carried_text += content
                         msgs.append({"role": "assistant", "content": content})
@@ -1274,7 +1275,7 @@ async def run_agent_stream(req, user, ctx):
                         # a call cut off mid-arguments is dropped whole, never repaired and run
                         if content.strip():
                             msgs.append({"role": "assistant", "content": content})
-                        msgs.append({"role": "user", "content": CUT_CALL_NOTICE})
+                        msgs.append({"role": "user", "content": cut_call_notice(tool_calls)})
                     else:
                         carried_text += content
                         msgs.append({"role": "assistant", "content": content})

@@ -1,7 +1,7 @@
 """Pydantic request models for capabilities routes."""
 
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class CapToggleReq(BaseModel):
@@ -80,6 +80,15 @@ class AgentLimitsReq(BaseModel):
     memory_allow_cloud: Optional[bool] = None
     memory_file_max_bytes: Optional[int] = None
     memory_max_files: Optional[int] = None
+
+
+class ChatLimitsReq(BaseModel):
+    """Chat limits: any key of core.chat_limits.CHAT_LIMITS (sent at the top level; values are clamped, unknown keys are
+    ignored), plus the two tables. thinking_budgets = {level: {tool_calls, token_budget, max_rounds}},
+    web_budget = {coverage: {tier: calls}}; only the cells sent are changed."""
+    model_config = ConfigDict(extra="allow")
+    thinking_budgets: Optional[dict] = None
+    web_budget: Optional[dict] = None
 
 
 class RouterSettingsReq(BaseModel):

@@ -150,6 +150,10 @@ def set_current_lane(lane: Optional[str]) -> contextvars.Token:
     return _current_lane.set(lane or None)
 
 
+def reset_current_lane(token: contextvars.Token) -> None:
+    _current_lane.reset(token)
+
+
 def current_lane() -> Optional[str]:
     return _current_lane.get()
 

@@ -122,7 +122,7 @@ def _n_sheets(n):
 
 
 def test_up_to_thirty_sheets_build_and_more_gets_an_actionable_error():
-    wb = openpyxl.load_workbook(io.BytesIO(B.build(_n_sheets(25), "t", True)))
+    wb = openpyxl.load_workbook(io.BytesIO(B.build("style: plain\n" + _n_sheets(25), "t", True)))
     assert len(wb.sheetnames) == 25
     try:
         B.build(_n_sheets(31), "t", True)

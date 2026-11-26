@@ -4,7 +4,7 @@ from typing import Optional, Union
 
 from ..tool_args import SHELL_COMMAND_KEYS, shell_command
 from .history_args import stub_content_error
-from .truncation import INVALID_ARGS_ERROR
+from .truncation import INVALID_ARGS_ERROR, invalid_args_error
 
 # marks arguments of a file-writing call that could not be parsed; never executed
 INVALID_JSON_KEY = "__invalid_json__"
@@ -53,7 +53,7 @@ def _bad_path_error(args: dict) -> Optional[str]:
 def validate_and_repair_tool_args(tool_name: str, args: dict, query_hint: str = "") -> tuple[dict, Optional[str]]:
     repaired = split_leaked_params(args) if isinstance(args, dict) else {}
     if repaired.get(INVALID_JSON_KEY):
-        return repaired, INVALID_ARGS_ERROR
+        return repaired, invalid_args_error(repaired.get("path") or repaired.get("file") or "")
     bad = _bad_path_error(repaired)
     if bad:
         return repaired, bad

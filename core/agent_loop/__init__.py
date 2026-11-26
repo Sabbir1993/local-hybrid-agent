@@ -20,6 +20,7 @@ from .truncation import (
     MAX_CUTOFF_RETRIES,
     CUT_CALL_NOTICE,
     CUT_TEXT_NOTICE,
+    cut_call_notice,
     was_cut_off,
 )
 from .sandbox import (
@@ -84,6 +85,7 @@ __all__ = [
     "_keep_recent_results",
     "MAX_CUTOFF_RETRIES",
     "CUT_CALL_NOTICE",
+    "cut_call_notice",
     "CUT_TEXT_NOTICE",
     "was_cut_off",
     "run_tool",
