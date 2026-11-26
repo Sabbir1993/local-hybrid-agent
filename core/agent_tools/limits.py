@@ -85,6 +85,24 @@ def effective_chunk_tokens(lane: str = None) -> int:
     return max(500, min(target, cap // 2) if cap > 0 else target)
 
 
+def document_split_advice(path) -> str:
+    """What to do when a call for an Office file or PDF is over the per-call cap: build it in pieces and keep the format.
+    "" for any other file. The generic refusal talks about web pages (inline CSS, repeated cards) and sent models that were asked
+    for a workbook off to HTML."""
+    from pathlib import Path
+    ext = Path(str(path or "")).suffix.lower()
+    if ext in (".xlsx", ".xls"):
+        return ("Keep the workbook as .xlsx - do NOT switch to HTML or another format. Build it in steps: doc_create(file=<name>.xlsx, "
+                "content=) with only the first 1-2 sheets now, each sheet a markdown table (`| Col | Col |`, `|---|---|`, then one "
+                "`| a | b |` line per row), then ONE doc_edit per remaining sheet with {op:'add_outline_sheet', name:'<Sheet>', "
+                "content:'| Col | Col |\n|---|---|\n| .. | .. |'}. Keep each call small.")
+    if ext in (".docx", ".doc", ".pptx", ".ppt", ".pdf"):
+        return (f"Keep the file as {ext} - do NOT switch to HTML or another format. Build it in steps: doc_create(file=<name>{ext}, "
+                "content=<the first part>), then doc_append(file=<name>, content=<next part>) for the rest, done=true on the last call. "
+                "Keep each call small.")
+    return ""
+
+
 def write_cap_tokens(lane: str = None) -> int:
     """Tokens one write_file/append_file call may carry: write_file_max_tokens, but never more than twice the chunk the
     model is told to send. A model that ignores the chunk advice is cut (and its complete part saved) at ~6k tokens

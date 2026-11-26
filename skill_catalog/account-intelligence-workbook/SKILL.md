@@ -101,6 +101,7 @@ widths: Metric=34, Why it matters to {seller}=50
 |---|---|---|---|---|---|
 | S1 | ... |
 ```
+Size: one write call carries only a few thousand tokens (a call over the cap is refused and nothing is saved). Never send the whole workbook at once: create the file with the first 2 sheets (Cover, Exec Summary), then add each remaining sheet with one `doc_edit` `{op:'add_outline_sheet', name:'<Sheet>', content:'<the sheet as a markdown table with its directives>'}`. Always pipe tables (`| a | b |`), never comma-separated lines, and never fall back to HTML.
 Formula rules: derived numbers (profit, margin, growth, totals, rankings) MUST be formulas that reference input cells, never typed values. Only inputs are typed. Only use functions the builder allows (SUM, IF, IFERROR, INDEX, MATCH, LARGE, RANK, XLOOKUP, SUMPRODUCT, COUNTIF...; not FILTER/SORT/LET).
 
 ## 4. Quality gates before delivering

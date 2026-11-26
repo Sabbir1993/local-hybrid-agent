@@ -11,7 +11,7 @@ from . import edit_engine, salvage
 from ..small_model import APP_CONFIG
 from . import file_state
 from .diffs import _record_diff
-from .limits import CHARS_PER_TOKEN, agent_limit, effective_chunk_tokens, est_tokens, write_cap_tokens
+from .limits import CHARS_PER_TOKEN, agent_limit, document_split_advice, effective_chunk_tokens, est_tokens, write_cap_tokens
 from .name_recovery import match_written
 from .verify_loop import verify_after
 from .workspace import (
@@ -81,6 +81,9 @@ def _too_big(content: str, tool: str, args: Optional[dict] = None, existing: boo
     # its estimate lands a little under the cap (JSON escaping): nothing of it can be written as sent.
     cut = int((args or {}).get("_oversize_tokens") or 0)
     n = max(cut, cap + 1) if cut else est_tokens(content)
+    doc_advice = document_split_advice((args or {}).get("path") or (args or {}).get("file") or (args or {}).get("filename"))
+    if n > cap and doc_advice and not existing:
+        return f"error: this {tool} content is about {n} tokens; one call may carry at most {cap}. {doc_advice}"
     if n > cap and (existing or tool in ("append_file", "edit_file")):
         # the file already holds the earlier sections: "write a skeleton first" here sends the model back to square one,
         # where it rewrites the file and loses them

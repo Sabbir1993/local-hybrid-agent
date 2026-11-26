@@ -150,6 +150,38 @@ def _is_sep(cells: list) -> bool:
     return bool(cells) and all(re.fullmatch(r":?-{2,}:?", c.strip()) or not c.strip() for c in cells)
 
 
+def _csv_fields(line: str):
+    """`a,b,"c, d"` -> ['a', 'b', 'c, d'], or None when the line is not comma-separated (fewer than two fields)."""
+    import csv
+    try:
+        row = next(csv.reader([line], skipinitialspace=True))
+    except (csv.Error, StopIteration):
+        return None
+    return row if len(row) >= 2 else None
+
+
+def _csv_row(line: str, in_csv: bool, n_expected: int, next_line: str):
+    """A table row written as CSV (a small model often does this under `## Sheet:`). Not a directive or heading. A table starts
+    when the next line has at least as many fields as this one; inside one, a row with another number of fields is still a row
+    (extra fields are joined into the last column, missing ones are left empty) unless it looks like the header of a new table."""
+    if line.lstrip().startswith("#") or _DIRECTIVE_RX.match(line):
+        return None
+    fields = _csv_fields(line)
+    if fields is None:
+        return None
+    n = len(fields)
+    nxt = _csv_fields(next_line) if next_line and "|" not in next_line else None
+    if in_csv:
+        if n != n_expected and nxt and len(nxt) == n and not any(re.search(r"\d", f) for f in fields):
+            return fields                                     # a header-like row followed by rows of its own width
+        return fields
+    return fields if nxt and len(nxt) >= n else None          # the row under a header may carry extra, unquoted commas
+
+
+def _fit_row(fields: list, n: int) -> list:
+    return fields[:n - 1] + [", ".join(fields[n - 1:])] if len(fields) > n else fields
+
+
 _PIPE_RX = re.compile(r"(?<!\\)\|")
 
 
@@ -194,8 +226,11 @@ def parse(text: str) -> dict:
         block = None
     lines = [r.rstrip() for r in str(text or "").splitlines() if r.strip()]
     in_table = False                    # the previous kept line was a table row
+    csv_n = 0                           # fields per row of the CSV table being read (0 = not in one)
     for li, line in enumerate(lines):
         was_table, in_table = in_table, False
+        if not was_table:
+            csv_n = 0
         m = _SHEET_RX.match(line)
         if m:
             start(m.group(1))
@@ -220,6 +255,29 @@ def parse(text: str) -> dict:
             d = re.match(r"^\s*theme\s*:\s*(\S+)", line, re.I)
             if d:
                 wb["theme"] = d.group(1).lower()
+                continue
+        if cur is not None and not cur["dashboard"] and "|" not in line:
+            fields = _csv_row(line, was_table and csv_n > 0, csv_n, lines[li + 1] if li + 1 < len(lines) else "")
+            if fields is not None:
+                in_table = True
+                n = len(fields)
+                target = block if block is not None else cur
+                new_table = bool(was_table and csv_n and n != csv_n and not any(re.search(r"\d", f) for f in fields)
+                                 and target["header"] is not None)
+                if new_table:                                  # a header-like row of another width: a further table
+                    block = {"title": pending_title or f"Table {len(cur['blocks']) + 2}", "at": "",
+                             "header": [_plain(f.strip()) for f in fields], "rows": [], "directives": []}
+                    cur["blocks"].append(block)
+                    pending_title, csv_n = "", n
+                    continue
+                if not (was_table and csv_n):
+                    csv_n = n
+                cells = [_plain(f.strip()) for f in _fit_row(fields, csv_n)]
+                row_title, pending_title = pending_title, ""
+                if target["header"] is None:
+                    target["header"] = cells
+                else:
+                    target["rows"].append(cells)
                 continue
         if line.lstrip().startswith("|") or (
                 cur is not None and not cur["dashboard"]
@@ -258,8 +316,11 @@ def parse(text: str) -> dict:
                 (block if block is not None and key in ("format", "total") else cur)["directives"].append((key, val))
         elif cur is not None:
             pending_title = _plain(line).strip().lstrip("#").strip().rstrip(":").strip()[:80]
-    wb["sheets"] = [s for s in wb["sheets"]
-                    if s["header"] or (s["dashboard"] and any(k in ("kpi", "chart") for k, _ in s["directives"]))]
+            cur.setdefault("sample", line.strip()[:90])
+    keep = [s for s in wb["sheets"]
+            if s["header"] or (s["dashboard"] and any(k in ("kpi", "chart") for k, _ in s["directives"]))]
+    wb["dropped"] = [(s["name"], s.get("sample", "")) for s in wb["sheets"] if s not in keep]     # sheets with no table at all
+    wb["sheets"] = keep
     return wb
 
 
@@ -377,7 +438,11 @@ def build(text: str, title: str = "", formulas: bool = True) -> bytes:
     _warnings.set([])
     spec = parse(text)
     if not any(s["header"] for s in spec["sheets"]):
-        raise BuildError("no sheet with a table found - write `## Sheet: Name` followed by a markdown table")
+        seen = "".join(f" Sheet '{n}' starts with: \"{smp}\"." for n, smp in spec.get("dropped", [])[:2] if smp)
+        raise BuildError("no sheet with a table found - write `## Sheet: Name` followed by a markdown table: a header line "
+                         "`| Metric | Value |`, the line `|---|---|`, then one `| a | b |` line per row." + seen)
+    for n, smp in spec.get("dropped", []):
+        _warn(f"sheet '{n}' has no table (it starts with \"{smp[:60]}\") and was left out; write it as a markdown table")
     if len(spec["sheets"]) > MAX_SHEETS:
         raise BuildError(f"{len(spec['sheets'])} sheets written, at most {MAX_SHEETS} per workbook: merge related sheets "
                          "(several tables can sit under one `## Sheet:`, each with its own header) and send it again")

@@ -62,8 +62,12 @@ def tool_write_file_common(args: dict) -> str:
 
     if args.get("_oversize_tokens"):
         # the stream was cut at the per-call cap and the body dropped: say so, not "empty" (the model would send the same giant call again)
-        from .limits import write_cap_tokens
+        from .limits import document_split_advice, write_cap_tokens
         cap = write_cap_tokens()
+        doc_advice = document_split_advice(path_arg)
+        if doc_advice:
+            return (f"error: nothing was saved: the file was about {args['_oversize_tokens']} tokens and one write_file call may carry "
+                    f"at most {cap}. {doc_advice}")
         return (f"error: nothing was saved: the file was about {args['_oversize_tokens']} tokens and one write_file call may carry at most {cap}. "
                 f"Call write_file again with a COMPLETE but much shorter file (under {int(cap * 0.6)} tokens: fewer sections, short text, "
                 "inline CSS, no repeated cards). Do not repeat the same long content.")
