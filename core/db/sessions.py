@@ -96,8 +96,41 @@ def db_list_sessions(pid: Optional[int], owner_user_id: int) -> list:
     return db_list_sessions_page(pid, owner_user_id)[0]
 
 
+def _has_title_auto_column() -> bool:
+    try:
+        return "title_auto" in [c[1] for c in _projects_db.execute("PRAGMA table_info(sessions)").fetchall()]
+    except Exception:
+        return False
+
+
+def db_session_title_state(sid: int, owner_user_id: int) -> dict:
+    """{"title", "auto", "user_turns"} for the topic-title step (core/session_title.py)."""
+    if db_session_owner(sid) != owner_user_id:
+        raise PermissionError("not your session")
+    auto_col = "COALESCE(title_auto, 0)" if _has_title_auto_column() else "0"
+    row = _projects_db.execute(f"SELECT title, {auto_col} AS auto FROM sessions WHERE id = ?", (sid,)).fetchone()
+    n = _projects_db.execute("SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user'", (sid,)).fetchone()[0]
+    return {"title": row["title"] if row else "", "auto": bool(row and row["auto"]), "user_turns": int(n)}
+
+
+def db_set_auto_title(sid: int, owner_user_id: int, title: Optional[str]) -> bool:
+    """Store a topic title (None = only stop trying) and end auto-titling. Only while the title is still automatic:
+    a rename that landed meanwhile wins. True when the row changed."""
+    if db_session_owner(sid) != owner_user_id:
+        raise PermissionError("not your session")
+    if not _has_title_auto_column():
+        return False
+    if title:
+        cur = _projects_db.execute("UPDATE sessions SET title = ?, title_auto = 0 WHERE id = ? AND title_auto = 1",
+                                   (_at_rest(title.strip())[:80], sid))
+    else:
+        cur = _projects_db.execute("UPDATE sessions SET title_auto = 0 WHERE id = ? AND title_auto = 1", (sid,))
+    _projects_db.commit()
+    return cur.rowcount > 0
+
+
 def db_create_session(pid: Optional[int], title: str = None, owner_user_id: int = None, agent_id: Optional[int] = None,
-                      model: Optional[str] = None) -> dict:
+                      model: Optional[str] = None, auto_title: bool = False) -> dict:
     if owner_user_id is None:
         raise ValueError("owner_user_id required")
     now = time.time()
@@ -108,6 +141,8 @@ def db_create_session(pid: Optional[int], title: str = None, owner_user_id: int 
     cur = _projects_db.execute(
         "INSERT INTO sessions (project_id, title, created_at, user_id, agent_id, model) VALUES (?, ?, ?, ?, ?, ?)",
         (actual_pid, title, now, owner_user_id, agent_id, _clean_model_name(model)))
+    if auto_title and _has_title_auto_column():
+        _projects_db.execute("UPDATE sessions SET title_auto = 1 WHERE id = ?", (cur.lastrowid,))
     _projects_db.commit()
     return {"id": cur.lastrowid, "title": title, "created_at": now, "agent_id": agent_id, "model": _clean_model_name(model)}
 
@@ -117,6 +152,8 @@ def db_update_session_title(sid: int, title: str, owner_user_id: int) -> None:
         raise PermissionError("not your session")
     title = _at_rest((title or "New session").strip())[:80]
     _projects_db.execute("UPDATE sessions SET title = ? WHERE id = ?", (title, sid))
+    if _has_title_auto_column():         # a name the user picked is final: no topic title replaces it
+        _projects_db.execute("UPDATE sessions SET title_auto = 0 WHERE id = ?", (sid,))
     _projects_db.commit()
 
 

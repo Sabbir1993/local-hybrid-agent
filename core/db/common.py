@@ -135,6 +135,10 @@ def _init_projects_db() -> ThreadLocalDB:
         conn.execute("ALTER TABLE sessions ADD COLUMN fork_of INTEGER")
     if "is_pinned" not in session_cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN is_pinned INTEGER DEFAULT 0")
+    # 1 = the title is a placeholder from the first message: core/session_title.py may replace it with the topic once
+    # the chat has one. 0 = fixed (named by the user, already titled by topic, or a chat from before this column).
+    if "title_auto" not in session_cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN title_auto INTEGER DEFAULT 0")
     plan_cols = [r[1] for r in conn.execute("PRAGMA table_info(plan_items)")]
     if "deps" not in plan_cols:
         conn.execute("ALTER TABLE plan_items ADD COLUMN deps TEXT DEFAULT '[]'")

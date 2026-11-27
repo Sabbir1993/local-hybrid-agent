@@ -288,7 +288,7 @@ interface AppState {
   fetchModels: () => Promise<void>;
   fetchProjects: () => Promise<void>;
   loadSelectedModel: () => Promise<void>;
-  sendPrompt: (text: string, options?: { images?: string[]; files?: string; displayContent?: string; voice?: boolean; truncateTo?: number; reattachRunId?: string; onAccepted?: () => void }) => Promise<void>;
+  sendPrompt: (text: string, options?: { images?: string[]; files?: string; displayContent?: string; voice?: boolean; truncateTo?: number; reattachRunId?: string; reattachStartedAt?: number; onAccepted?: () => void }) => Promise<void>;
   abortGeneration: () => void;
   setActiveModal: (modal: ActiveModal) => void;
   openSettingsModal: (tab?: string) => void;
@@ -324,6 +324,24 @@ setTimeout(() => { loadMedia().catch(() => { mediaModule = null; }); }, 0);
 
 // a prompt is being set up (model switch, session create): a second Enter must not start a second run
 let sendGate = false;
+
+// Chats whose title is settled (named by topic, renamed, or older than topic titles): no more /auto-title calls.
+const titleSettled = new Set<string>();
+/** After a saved reply: the server names the chat by its topic while the title is still the first-message
+ *  placeholder (core/session_title.py), e.g. a chat that opened with "Hi" gets a real name once it has a question. */
+const requestTopicTitle = (sid: string | number | null, onRenamed: () => void) => {
+  if (sid == null || sid === '') return;
+  const key = String(sid);
+  if (titleSettled.has(key)) return;
+  apiFetch(`/control/sessions/${encodeURIComponent(key)}/auto-title`, { method: 'POST', background: true })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      if (!d) return;
+      if (!d.auto) titleSettled.add(key);
+      if (d.changed) onRenamed();
+    })
+    .catch(() => {});
+};
 // chats whose history is being compacted right now
 const compacting = new Set<string>();
 
@@ -564,7 +582,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   reattachDetachedRuns: async (sessionId) => {
     const key = sessionKey(sessionId);
     if (runs.has(key) || get().isStreaming) return;
-    let rows: Array<{ id: string; running?: boolean }> = [];
+    let rows: Array<{ id: string; running?: boolean; started?: number }> = [];
     try {
       const r = await apiFetch(`/agent/runs?session_id=${encodeURIComponent(String(sessionId))}`, { background: true });
       if (!r.ok) return;
@@ -581,7 +599,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       tried.add(row.id);
       const accepted = () => get().showToast(row.running ? 'Reconnecting to a run that kept going…' : 'Showing a run that finished while you were away', 'info');
       let ok = false;
-      const opts = { reattachRunId: row.id, onAccepted: () => { ok = true; accepted(); } };
+      // a run still going keeps its timer from when it really started (server epoch seconds); a finished replay has none
+      const startedMs = row.running && row.started ? Math.min(row.started * 1000, Date.now()) : undefined;
+      const opts = { reattachRunId: row.id, reattachStartedAt: startedMs, onAccepted: () => { ok = true; accepted(); } };
       await get().sendPrompt('', opts);
       if (!ok) {
         // the send gate was busy: retry once after it clears
@@ -1403,7 +1423,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  sendPrompt: async (text: string, options?: { images?: string[]; files?: string; displayContent?: string; voice?: boolean; truncateTo?: number; reattachRunId?: string; onAccepted?: () => void }) => {
+  sendPrompt: async (text: string, options?: { images?: string[]; files?: string; displayContent?: string; voice?: boolean; truncateTo?: number; reattachRunId?: string; reattachStartedAt?: number; onAccepted?: () => void }) => {
     if (sendGate) return;
     sendGate = true;
     let released = false;
@@ -1468,7 +1488,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const res = await apiFetch(`/control/projects/${pid}/sessions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title, agent_id: agentId, model: targetModelId || undefined }),
+          body: JSON.stringify({ title, agent_id: agentId, model: targetModelId || undefined, auto_title: agentId === undefined }),
         });
         const data = await res.json();
         if (!res.ok || !data || !data.session) throw new Error((data && data.error) || `HTTP ${res.status}`);
@@ -1517,8 +1537,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       thinking: '',
       timestamp: timeNow,
       statusText: reattachId ? 'Reconnecting to the run...' : CONNECTING_STATUS,
-      // drives the live timer beside the status line; a reattached run started earlier, elsewhere, so it has none
-      startedAt: reattachId ? undefined : Date.now(),
+      // drives the live timer beside the status line; a reattached run counts from its real start (given by the server)
+      startedAt: reattachId ? options?.reattachStartedAt : Date.now(),
       check: !reattachId && get().answerCheck === 'gate' ? { state: 'pending', mode: 'gate', t0: Date.now() } : undefined,
     };
 
@@ -1648,7 +1668,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           runState: agentState.runState || undefined,
           check: L.check?.state === 'done' ? L.check : undefined,
           timeStr: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        });
+        }).then((saved) => { if (saved) requestTopicTitle(currentSessionId, () => get().fetchSessions()); });
         const nowMs = Date.now();
         set((st) => ({
           sessions: st.sessions.map((s) =>
@@ -1703,7 +1723,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           modelDisplay: modelDisplay || L.model || undefined,
           errorAlert: errorText ? errorText : undefined,
           timeStr: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        });
+        }).then((saved) => { if (saved) requestTopicTitle(currentSessionId, () => get().fetchSessions()); });
         const nowMs = Date.now();
         set((st) => ({
           sessions: st.sessions.map((s) =>

@@ -127,6 +127,8 @@ class SmallModelInstance:
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
                     text=True,
+                    encoding="utf-8",      # see core/state.py: no ANSI code-page decode on Windows
+                    errors="replace",
                     bufsize=1,
                     env=env,
                 )

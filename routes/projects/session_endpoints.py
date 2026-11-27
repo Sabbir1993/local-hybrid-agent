@@ -59,12 +59,24 @@ async def list_sessions(pid: int, limit: Optional[int] = None, before: Optional[
 @router.post("/control/projects/{pid}/sessions")
 async def create_session(pid: int, req: SessionReq, user: Principal = Depends(get_current_user)):
     try:
-        s = db_create_session(pid, req.title, owner_user_id=user.id, agent_id=req.agent_id, model=req.model)
+        s = db_create_session(pid, req.title, owner_user_id=user.id, agent_id=req.agent_id, model=req.model,
+                              auto_title=bool(req.auto_title))
     except PermissionError:
         return JSONResponse({"error": "project not found"}, status_code=404)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True, "session": s}
+
+
+@router.post("/control/sessions/{sid}/auto-title")
+async def auto_title(sid: int, user: Principal = Depends(get_current_user)):
+    """After a saved reply: name the chat by its topic while its title is still the first-message placeholder."""
+    from core.session_title import suggest_title
+    try:
+        res = await suggest_title(sid, user.id)
+    except PermissionError:
+        return JSONResponse({"error": "session not found"}, status_code=404)
+    return {"ok": True, **res}
 
 
 @router.get("/control/sessions/search")

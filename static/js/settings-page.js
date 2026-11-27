@@ -749,7 +749,11 @@ window.populateAccountPanels = populateAccountPanels;
   const policy = document.getElementById('pwd-policy');
   const newPwd = document.getElementById('pwd-new');
   const confirmPwd = document.getElementById('pwd-confirm');
-  const identity = ((u.display_name || '') + ' ' + (u.email || u.username || '')).toLowerCase();
+  // read at check time: window.__user can load after this IIFE runs, and `u` is not in scope here
+  const identityOf = () => {
+    const u = window.__user || {};
+    return ((u.display_name || '') + ' ' + (u.email || u.username || '')).toLowerCase();
+  };
 
   const updatePolicy = () => {
     if (!policy) return;
@@ -759,7 +763,7 @@ window.populateAccountPanels = populateAccountPanels;
       letter: /[A-Za-z]/.test(v),
       digit: /\d/.test(v),
       match: !!v && v === (confirmPwd?.value || ''),
-      identity: !v || !identity.includes(v.toLowerCase()),
+      identity: !v || !identityOf().includes(v.toLowerCase()),
     };
     policy.querySelectorAll('[data-rule]').forEach(el => {
       const ok = rules[el.getAttribute('data-rule')];
@@ -776,7 +780,7 @@ window.populateAccountPanels = populateAccountPanels;
     const next = document.getElementById('pwd-new')?.value || '';
     const confirm = document.getElementById('pwd-confirm')?.value || '';
     if (next !== confirm) { status.textContent = 'New passwords do not match.'; status.style.color = '#f43f5e'; return; }
-    if (next.length < 12 || !/[A-Za-z]/.test(next) || !/\d/.test(next) || identity.includes(next.toLowerCase())) {
+    if (next.length < 12 || !/[A-Za-z]/.test(next) || !/\d/.test(next) || identityOf().includes(next.toLowerCase())) {
       status.textContent = 'New password does not meet the policy below.'; status.style.color = '#f43f5e'; return;
     }
     btn.disabled = true;

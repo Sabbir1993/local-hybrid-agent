@@ -403,9 +403,16 @@ def build_launch_command(profile: dict) -> list[str]:
     if op_offload is False or (op_offload is None and experts_in_ram):
         cmd += ["--no-op-offload"]
     # --load-mode none (no mmap) crashes the SYCL build with a general protection fault in libc while the weights are
-    # copied (llama-server exit -11); the same model loads fine without it, so SYCL always keeps the default
-    if profile.get("use_mmap") is False and str(backend) != "sycl":
-        cmd += ["--load-mode", "none"]
+    # copied (llama-server exit -11); the same model loads fine without it, so SYCL always keeps the default.
+    # The Vulkan build b12810 loads without error but the weights on Vulkan1 (first A770) come out wrong: every reply
+    # is one repeated token (">>>>", "GGGG"). Reproduced with Qwen3.5-4B/9B and flint, -fa on/off, f16/q8_0 KV;
+    # the same flags on b11429, or with the default load mode, answer normally. So Vulkan keeps the default too.
+    if profile.get("use_mmap") is False:
+        if str(backend) in ("sycl", "vulkan"):
+            print(f"[server_manager] use_mmap=false ignored on {backend}: --load-mode none corrupts or crashes this "
+                  f"backend, loading with the default (mmap)")
+        else:
+            cmd += ["--load-mode", "none"]
     cmd += ["--jinja"]
     if profile.get("mtp_enabled") and profile.get("mtp_draft_path"):
         draft = Path(profile["mtp_draft_path"])

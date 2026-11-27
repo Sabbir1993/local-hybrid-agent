@@ -27,6 +27,14 @@ JOBS = {
                 "Always on this PC: diffs may contain secrets, so they are never sent to a cloud model.",
         "local_only": True,
     },
+    "session_title": {
+        "kind": "chat",
+        "default": "executor",
+        "label": "Chat titles",
+        "hint": "Names a chat after its topic once it has one (a chat that opens with \"Hi\" waits for the real "
+                "question). Always on this PC: it reads the chat, so it never goes to a cloud model.",
+        "local_only": True,
+    },
     "subagent": {
         "kind": "chat",
         "default": "executor",

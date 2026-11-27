@@ -255,6 +255,11 @@ class ProxyState:
                 # not the server's own stdin: under pm2 that is a socket, which every child would inherit
                 stdin=subprocess.DEVNULL,
                 text=True,
+                # llama.cpp writes UTF-8 (model names, metadata, non-ASCII text). Without an explicit
+                # encoding Windows decodes with the ANSI code page (cp1252), where bytes such as 0x8D
+                # are undefined: readline() raised UnicodeDecodeError, which killed the log pump.
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
                 env=env,
                 # vLLM starts one worker process per GPU: its own process group lets a stop end all of them

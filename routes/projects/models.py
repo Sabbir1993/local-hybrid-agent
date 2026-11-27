@@ -19,6 +19,8 @@ class UpdateWorkspaceReq(BaseModel):
 
 class SessionReq(BaseModel):
     title: Optional[str] = None
+    # the title is a placeholder from the first message: name the chat by its topic later (core/session_title.py)
+    auto_title: Optional[bool] = None
     agent_id: Optional[int] = None
     model: Optional[str] = None
     is_pinned: Optional[bool] = None

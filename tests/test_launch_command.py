@@ -221,8 +221,19 @@ class OptionalFlags(unittest.TestCase):
         self.assertEqual(cmd[-2:], ["--temp", "0.7"])
 
     def test_load_mode_none_when_mmap_disabled(self):
-        cmd = _cmd(use_mmap=False)
+        cmd = _cmd(use_mmap=False, backend="cuda", gpu_devices=[0])
         self.assertEqual(_flag(cmd, "--load-mode"), "none")
+
+    def test_flash_attn_passed_through_on_sycl(self):
+        # a quantized V cache (q4_0/q8_0) needs flash attention: never rewrite the saved value
+        for fa in ("auto", "on", "off"):
+            self.assertEqual(_flag(_cmd(backend="sycl", gpu_devices=[0, 1], flash_attn=fa), "-fa"), fa)
+
+    def test_load_mode_none_never_sent_to_vulkan_or_sycl(self):
+        # b12810 Vulkan: --load-mode none gives garbage output on Vulkan1; SYCL: crashes while copying weights
+        self.assertNotIn("--load-mode", _cmd(use_mmap=False))
+        self.assertNotIn("--load-mode", _cmd(use_mmap=False, backend="vulkan", gpu_devices=[0, 1]))
+        self.assertNotIn("--load-mode", _cmd(use_mmap=False, backend="sycl", gpu_devices=[0]))
 
     def test_load_mode_omitted_by_default(self):
         self.assertNotIn("--load-mode", _cmd())
