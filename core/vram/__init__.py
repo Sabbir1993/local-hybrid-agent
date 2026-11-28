@@ -37,6 +37,8 @@ from .gguf_parser import (
 )
 from .estimator import (
     estimate_footprint,
+    estimate_draft,
+    recurrent_state_bytes,
     effective_params,
     _shares_for,
     _eval_fit,
@@ -89,6 +91,8 @@ __all__ = [
     "parse_gguf_info",
     "read_gguf_scalars",
     "estimate_footprint",
+    "estimate_draft",
+    "recurrent_state_bytes",
     "effective_params",
     "_shares_for",
     "_eval_fit",

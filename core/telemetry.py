@@ -66,7 +66,56 @@ def _weighted_tps(rows: List[dict]) -> tuple:
 _slots_fail_count = 0
 
 
+def _slots_fill(slots: list) -> list:
+    """Per-slot context use from llama-server's /slots: tokens held now, and whether it is generating."""
+    out = []
+    for s in slots:
+        if not isinstance(s, dict):
+            continue
+        nt = (s.get("next_token") or [{}])
+        n_decoded = (nt[0] if isinstance(nt, list) and nt else nt if isinstance(nt, dict) else {}).get("n_decoded") or 0
+        out.append({"id": s.get("id"), "n_ctx": s.get("n_ctx"), "busy": bool(s.get("is_processing")),
+                    "n_past": int(s.get("n_prompt_tokens") or 0) + int(n_decoded or 0)})
+    return out
+
+
+def _serving_snapshot(slots_fill: list) -> dict:
+    """Queue, shared-pool and slot state for capacity monitoring (15 users on one model)."""
+    from . import serving_slots
+    out = {"slots_fill": slots_fill, "slot_table": serving_slots.table.snapshot(),
+           "pool": {"used_tokens": serving_slots.pool.used, "running": serving_slots.pool.running,
+                    "waiting": serving_slots.pool.waiting,
+                    "capacity_tokens": serving_slots.pool_capacity(state.profile) or None},
+           "helper_slot": serving_slots.helper_slot_index(serving_slots.main_n_slots())}
+    try:
+        out.update(serving_slots.queue_stats())
+    except Exception:
+        pass
+    return out
+
+
+# One snapshot per tick, shared by every viewer: each dashboard (websocket every 0.75 s, /control/telemetry polls) used
+# to compute its own, which repeated the GPU queries and the llama-server /slots call per viewer, and appended a point
+# to the sparkline history per viewer (15 open dashboards = 15 points a second, so the charts sped up with the audience).
+SNAPSHOT_TTL_S = 0.7
+_snap: Optional[Dict[str, Any]] = None
+_snap_at = 0.0
+_snap_task: Optional["asyncio.Future"] = None
+
+
 async def get_telemetry_snapshot() -> Dict[str, Any]:
+    global _snap, _snap_at, _snap_task
+    if _snap is not None and time.time() - _snap_at < SNAPSHOT_TTL_S:
+        return _snap
+    loop = asyncio.get_running_loop()
+    if _snap_task is None or _snap_task.done() or _snap_task.get_loop() is not loop:
+        _snap_task = asyncio.ensure_future(_compute_telemetry_snapshot())
+    snap = await asyncio.shield(_snap_task)
+    _snap, _snap_at = snap, time.time()
+    return snap
+
+
+async def _compute_telemetry_snapshot() -> Dict[str, Any]:
     now = time.time()
 
     # 1. GPU Telemetry
@@ -98,9 +147,10 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
 
     devices = gpu_data.get("devices", [])
     if devices:
-        gpu_name = f"{len(devices)}x {devices[0].get('name', 'Intel Arc A770')}"
+        gpu_name = f"{len(devices)}x {devices[0].get('name') or 'GPU'}"
     else:
-        gpu_name = gpu_data.get("hardware_tag") or "Dual Intel Arc A770"
+        # no device list: say what is known instead of naming the old A770 box (the B70 box would read as A770)
+        gpu_name = gpu_data.get("hardware_tag") or "GPU"
 
     # Real sensors only (nvidia-smi / LibreHardwareMonitor): on this Vulkan
     # box nothing measures temperature or power, so they stay None and the
@@ -164,25 +214,28 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
     # Context Fill from llama-server /slots
     global _slots_fail_count
     ctx_info = {"n_ctx": None, "n_past": None, "n_prompt": None, "pct": None}
+    slots_fill = []          # every slot, not only slot 0 (15 users = 15 slots)
     if is_server_up:
         try:
-            resp = await state.client.get("/slots", timeout=1.2)
-            if resp.status_code == 200:
-                slots = resp.json()
-                if slots and isinstance(slots, list):
-                    s0 = slots[0]
-                    n_ctx = s0.get("n_ctx") or None
-                    n_prompt = s0.get("n_prompt_tokens") or 0
-                    n_decoded = (s0.get("next_token") or [{}])[0].get("n_decoded") or 0
-                    n_past = n_prompt + n_decoded
-                    pct = round((n_past / max(1, n_ctx or 0)) * 100, 1) if n_ctx else None
-                    ctx_info = {
-                        "n_ctx": n_ctx,
-                        "n_past": n_past,
-                        "n_prompt": n_prompt,
-                        "pct": pct,
-                    }
-                _slots_fail_count = 0
+            from . import serving_slots
+            slots = await serving_slots.main_slots(timeout=1.2)   # shared with the status bar, at most 1 s old
+            if slots is None:
+                raise RuntimeError("no /slots answer")
+            if slots:
+                slots_fill = _slots_fill(slots)
+                s0 = slots[0]
+                n_ctx = s0.get("n_ctx") or None
+                n_prompt = s0.get("n_prompt_tokens") or 0
+                n_decoded = (s0.get("next_token") or [{}])[0].get("n_decoded") or 0
+                n_past = n_prompt + n_decoded
+                pct = round((n_past / max(1, n_ctx or 0)) * 100, 1) if n_ctx else None
+                ctx_info = {
+                    "n_ctx": n_ctx,
+                    "n_past": n_past,
+                    "n_prompt": n_prompt,
+                    "pct": pct,
+                }
+            _slots_fail_count = 0
         except Exception as e:
             # a quiet except here made a persistently broken /slots look like
             # healthy zeros; every 20th failure surfaces
@@ -315,6 +368,7 @@ async def get_telemetry_snapshot() -> Dict[str, Any]:
             },
         },
         "context": ctx_info,
+        "serving": _serving_snapshot(slots_fill),
         "hardware": {
             "system_ram_used_gb": ram_used_gb,
             "system_ram_total_gb": ram_total_gb,

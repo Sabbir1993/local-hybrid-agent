@@ -2,7 +2,7 @@
 const CFG_DEFAULTS = {
   ctx: 32768, ngl: 999, threads: 0, tb: 0, batch: 2048, ubatch: 512,
   np: 1, kai: 25, ts: '9,11', sm: 'layer', fa: 'auto', ct: 'f16',
-  kvps: 0, cru: 256, cram: 0, mmap: true,
+  kvps: 0, cru: 256, cram: 0, ctxcp: 0, mmap: true,
 };
 
 // One-line plain-words explanations, used on the capability pills and in the model tooltips
@@ -564,6 +564,7 @@ function fillConfigForm(c) {
     $('cfg-ubatch').value = c.ubatch_size ?? CFG_DEFAULTS.ubatch;
     $('cfg-np').value = c.n_slots ?? CFG_DEFAULTS.np;
     if ($('cfg-peruser')) $('cfg-peruser').value = c.max_inflight_per_user ?? 1;
+    if ($('cfg-helperslot')) $('cfg-helperslot').value = String(c.helper_slot ?? 0);
     $('cfg-kai').value = c.keepalive_interval_s ?? CFG_DEFAULTS.kai;
     $('cfg-ts').value = c.tensor_split ?? CFG_DEFAULTS.ts;
     // The GPUs come from the machine's runtime (status: gpu_devices), not from this model's saved list, which can name
@@ -581,6 +582,8 @@ function fillConfigForm(c) {
     if ($('cfg-kvps')) $('cfg-kvps').value = c.kv_unified_per_slot ?? CFG_DEFAULTS.kvps;
     if ($('cfg-cru')) $('cfg-cru').value = c.cache_reuse ?? CFG_DEFAULTS.cru;
     if ($('cfg-cram')) $('cfg-cram').value = c.cache_ram ?? CFG_DEFAULTS.cram;
+    if ($('cfg-ctxcp')) $('cfg-ctxcp').value = c.ctx_checkpoints ?? CFG_DEFAULTS.ctxcp;
+    hybridHints(!!c.hybrid);
     // MTP section
     const mtpAvail = !!c.mtp_available;
     const mtpRow = $('mtp-row');
@@ -754,6 +757,23 @@ function tsCheck() {
   layersInfo();
 }
 
+/* A hybrid model (qwen35: recurrent + attention layers) cannot shift its recurrent state, so llama-server ignores
+   cache reuse for it (the launch leaves the flag out), and its checkpoints default to 4 (core/process.py). */
+function hybridHints(hybrid) {
+  const cru = $('cfg-cru');
+  if (cru) {
+    const item = cru.closest('.cfg-item');
+    cru.style.opacity = hybrid ? '0.5' : '';
+    const tip = hybrid
+      ? 'No effect on this hybrid model: llama.cpp cannot shift its recurrent state, so cache reuse is not sent. Prompt reuse works through the sticky prompt prefix and checkpoints instead.'
+      : 'Minimum chunk size reused from the KV cache via shifting (--cache-reuse). 0 = off';
+    cru.title = tip;
+    if (item) item.title = tip;
+  }
+  const cp = $('cfg-ctxcp');
+  if (cp) cp.placeholder = hybrid ? 'auto (4)' : 'auto (32)';
+}
+
 /* View only: the model's total layers and how the current shares divide them, so an admin can work out what fits on a GPU. */
 function layersInfo() {
   const c = (typeof cfgEngineInfo !== 'undefined' && cfgEngineInfo) || {};
@@ -868,11 +888,13 @@ if ($('btn-apply')) $('btn-apply').onclick = async () => {
     kv_unified_per_slot: parseInt($('cfg-kvps') && $('cfg-kvps').value) || 0,
     cache_reuse: parseInt($('cfg-cru') && $('cfg-cru').value) || 0,
     cache_ram: parseInt($('cfg-cram') && $('cfg-cram').value) || 0,
+    ctx_checkpoints: parseInt($('cfg-ctxcp') && $('cfg-ctxcp').value) || 0,
     mtp_enabled: $('cfg-mtp') && $('cfg-mtp').checked,
     mtp_draft_n_max: parseInt($('mtp-nmax') && $('mtp-nmax').value) || 3,
     vision_capable: $('cfg-vision') && $('cfg-vision').checked,
   };
   if ($('cfg-peruser')) updates.max_inflight_per_user = parseInt($('cfg-peruser').value) || 1;
+  if ($('cfg-helperslot')) updates.helper_slot = parseInt($('cfg-helperslot').value) || 0;
   if ($('cfg-engine')) {
     if ($('cfg-vseqs')) updates.vllm_max_num_seqs_default = parseInt($('cfg-vseqs').value) || 8;
     Object.assign(updates, {

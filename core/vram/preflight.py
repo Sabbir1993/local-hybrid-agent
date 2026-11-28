@@ -3,13 +3,15 @@ from pathlib import Path
 
 from ..backend import device_prefix
 from ..config import ACTIVE_RUNTIME, CONFIG_DEFAULTS
-from .constants import GB, PreflightError, _SYCL_HEADROOM_GB, _preflight_cfg
+from .constants import (GB, MIB, PreflightError, _LLAMA_DEFAULT_CTX_CHECKPOINTS, _SYCL_HEADROOM_GB,
+                        _preflight_cfg)
 from .devices import DeviceQueryError, query_devices
 from .estimator import (
     _build_suggestions,
     _eval_fit,
     _shares_for,
     effective_params,
+    estimate_draft,
     estimate_footprint,
     load_options,
 )
@@ -45,6 +47,13 @@ def _human_msg(plan: dict) -> str:
              f"compute {est.get('compute_gb')}) with -ngl {eff.get('n_gpu_layers')}"
              f"{_moe_note(plan)}, "
              f"split \"{eff.get('tensor_split')}\", headroom {est.get('headroom_gb')} GB"]
+    # the items the line above leaves out, each on its own line
+    if est.get("recurrent_gb"):
+        lines.append(f"  + recurrent state {est['recurrent_gb']} GB "
+                     f"({est.get('recurrent_per_slot_mib')} MiB/slot x {est.get('n_slots')} slots)")
+    if est.get("mtp_kv_gb") or est.get("mtp_compute_gb"):
+        lines.append(f"  + MTP draft KV {est.get('mtp_kv_gb')} GB ({est.get('mtp_layers')} layer(s), f16) "
+                     f"+ MTP compute {est.get('mtp_compute_gb')} GB")
     for d in plan.get("devices", []):
         if d.get("target"):
             if d.get("short_gb", 0) > 0:
@@ -53,8 +62,12 @@ def _human_msg(plan: dict) -> str:
             else:
                 lines.append(f"  {_device_label(d, eff.get('backend'))}: need {d['need_gb']} GB, "
                              f"free {d['free_gb']} GB (margin {d['margin_gb']} GB)")
+            bd = d.get("breakdown") or {}
+            if bd.get("recurrent_gb") or bd.get("mtp_kv_gb") or bd.get("mtp_compute_gb"):
+                lines.append("    = " + " + ".join(f"{k[:-3].replace('_', ' ')} {v}"
+                                                   for k, v in bd.items() if v))
     host = plan.get("host") or {}
-    if host and host.get("partial_offload"):
+    if host and host.get("checked", host.get("partial_offload")):
         if host.get("unbounded_cache"):
             lines.append("  system RAM: prompt cache is unbounded (-cram -1); set a finite cache_ram before launch")
         else:
@@ -63,7 +76,9 @@ def _human_msg(plan: dict) -> str:
             lines.append(
                 f"  system RAM: need {host['required_gb']} GB "
                 f"(CPU weights {host['weights_gb']} + cache {host['cache_gb']} + "
-                f"reserve {host['reserve_gb']}), available {host['available_gb']} GB "
+                + (f"context checkpoints {host['checkpoints_gb']} ({host['ctx_checkpoints']}/slot) + "
+                   if host.get("checkpoints_gb") else "")
+                + f"reserve {host['reserve_gb']}), available {host['available_gb']} GB "
                 f"({verdict})"
             )
         if host.get("swap_warning"):
@@ -99,27 +114,60 @@ def _devices_or_fail(eff: dict, plan: dict, force: bool = False) -> list:
         return []
 
 
+def _card_breakdown(fp: dict, weights_b: int, share: float, off_frac: float) -> dict:
+    """One card's need, item by item: weights, KV, recurrent state and MTP KV are split by the card's share of
+    the offloaded layers (as _eval_fit does); compute, MTP compute and headroom are paid by every card."""
+    split = lambda b: round(b * off_frac * share / GB, 2)
+    return {"weights_gb": split(weights_b), "kv_gb": split(fp["kv_total_b"]),
+            "recurrent_gb": split(fp.get("recurrent_b", 0)), "mtp_kv_gb": split(fp.get("mtp_kv_b", 0)),
+            "compute_gb": round(fp["compute_b"] / GB, 2),
+            "mtp_compute_gb": round(fp.get("mtp_compute_b", 0) / GB, 2),
+            "headroom_gb": round(fp["headroom_b"] / GB, 2)}
+
+
+def _ctx_checkpoints(profile: dict, eff: dict, info: dict) -> int:
+    """Context checkpoints per slot the launch will use: the launcher's own rule (core/process.py
+    ctx_checkpoints_for, so the checked value is the launched value), else the profile's value, else
+    llama-server's default of 32 (no -ctxcp passed)."""
+    prof = dict(profile, ctx_checkpoints=eff.get("ctx_checkpoints") or 0)
+    try:
+        from ..process import ctx_checkpoints_for
+        n = int(ctx_checkpoints_for(prof, info) or 0)
+    except Exception:
+        n = int(eff.get("ctx_checkpoints") or 0)
+    return n if n > 0 else _LLAMA_DEFAULT_CTX_CHECKPOINTS
+
+
 def _host_plan(eff: dict, *, total_weights_b: int, gpu_candidate_weights_b: int,
-               units: int, cfg: dict, snapshot: dict | None = None) -> dict:
+               units: int, cfg: dict, snapshot: dict | None = None,
+               checkpoint_b: int = 0, checkpoints: int = 0) -> dict:
+    """System-RAM admission. Checked when weights stay in RAM (partial offload) or when a hybrid model's
+    context checkpoints live there: each is a copy of one slot's recurrent state, `checkpoints` per slot
+    (checkpoint_b = checkpoints x slots x per-slot state), held in host RAM even with every layer on the GPU."""
     snapshot = snapshot or host_memory_snapshot()
     gpu_fraction = min(max(int(eff["n_gpu_layers"]), 0), units) / max(1, units)
     gpu_weights_b = int(max(0, gpu_candidate_weights_b) * gpu_fraction)
     host_weights_b = max(0, int(total_weights_b) - gpu_weights_b)
     partial_offload = host_weights_b > 0
+    checkpoint_b = max(0, int(checkpoint_b))
+    checked = partial_offload or checkpoint_b > 0
     cache_b = int(eff.get("cache_ram_mb", 0)) * 1024 * 1024
     reserve_b = int(float(cfg.get("host_headroom_gb", 4.0)) * GB)
-    unbounded = bool(eff.get("cache_ram_unbounded")) and partial_offload
-    required_b = host_weights_b + cache_b + reserve_b
+    unbounded = bool(eff.get("cache_ram_unbounded")) and checked
+    required_b = host_weights_b + cache_b + checkpoint_b + reserve_b
     available_b = int(snapshot["available_b"])
     margin_b = available_b - required_b
     swap_used_b = int(snapshot.get("swap_used_b") or 0)
-    fit = (not partial_offload) or (not unbounded and margin_b >= 0)
+    fit = (not checked) or (not unbounded and margin_b >= 0)
     return {
         "fit": fit,
+        "checked": checked,
         "partial_offload": partial_offload,
         "unbounded_cache": unbounded,
         "weights_gb": round(host_weights_b / GB, 2),
         "cache_gb": round(cache_b / GB, 2),
+        "checkpoints_gb": round(checkpoint_b / GB, 2),
+        "ctx_checkpoints": int(checkpoints),
         "reserve_gb": round(reserve_b / GB, 2),
         "required_gb": round(required_b / GB, 2),
         "available_gb": round(available_b / GB, 2),
@@ -128,7 +176,7 @@ def _host_plan(eff: dict, *, total_weights_b: int, gpu_candidate_weights_b: int,
         "short_gb": round(max(0, -margin_b) / GB, 2),
         "swap_total_gb": round(int(snapshot.get("swap_total_b") or 0) / GB, 2),
         "swap_used_gb": round(swap_used_b / GB, 2),
-        "swap_warning": partial_offload and swap_used_b >= 512 * 1024 * 1024,
+        "swap_warning": checked and swap_used_b >= 512 * 1024 * 1024,
     }
 
 
@@ -185,6 +233,7 @@ def plan_launch(profile: dict, overrides: dict | None = None,
                             eff["ubatch_size"], eff["flash_attn"],
                             n_cpu_moe=eff["n_cpu_moe"],
                             n_expert_used=info.get("n_expert") or 0,
+                            n_seqs=eff["n_slots"],
                             # an explicit preflight.headroom_gb in app.json always wins
                             headroom_gb=(_SYCL_HEADROOM_GB if str(eff.get("backend")) == "sycl"
                                          and not cfg.get("headroom_set") else None))
@@ -194,10 +243,25 @@ def plan_launch(profile: dict, overrides: dict | None = None,
     if moe and eff["n_cpu_moe"] > 0:
         moe_ram_b = expert_bytes_offloaded(mp, info, fp["weights_b"], eff["n_cpu_moe"])
         weights_b -= moe_ram_b
-    fp["total_b"] = weights_b + fp["kv_total_b"] + fp["compute_b"]
+    # MTP draft: beyond its file (already in draft_b) it has its own KV cache and compute buffer
+    draft = estimate_draft(parse_gguf_info(eff["mtp_draft_path"]) if eff.get("mtp_draft_path") else None,
+                           eff["context_size"], eff["ubatch_size"])
+    fp["mtp_kv_b"], fp["mtp_kv_per_token_b"] = draft["kv_b"], draft["kv_per_token_b"]
+    fp["mtp_compute_b"] = draft["compute_b"]
+    # what is split across the cards like the KV cache, and what every card pays in full
+    split_b = fp["kv_total_b"] + fp["recurrent_b"] + fp["mtp_kv_b"]
+    comp_b = fp["compute_b"] + fp["mtp_compute_b"]
+    fp["total_b"] = weights_b + split_b + comp_b
+    plan["effective"].update(n_slots=eff["n_slots"], mtp=bool(eff.get("mtp_draft_path")))
     plan["estimate"] = {"weights_gb": round(weights_b / GB, 2),
                         "kv_gb": round(fp["kv_total_b"] / GB, 2),
                         "compute_gb": round(fp["compute_b"] / GB, 2),
+                        "recurrent_gb": round(fp["recurrent_b"] / GB, 2),
+                        "recurrent_per_slot_mib": round(fp["recurrent_per_seq_b"] / MIB, 1),
+                        "n_slots": fp["n_seqs"],
+                        "mtp_kv_gb": round(fp["mtp_kv_b"] / GB, 2),
+                        "mtp_compute_gb": round(fp["mtp_compute_b"] / GB, 2),
+                        "mtp_layers": draft["layers"],
                         "headroom_gb": round(fp["headroom_b"] / GB, 2),
                         "total_gb": round(fp["total_b"] / GB, 2),
                         "kv_per_token_kb": round(fp["kv_per_token_b"] / 1024, 2),
@@ -226,14 +290,14 @@ def plan_launch(profile: dict, overrides: dict | None = None,
     units = info["n_layer"] + 1
     s_norm = _shares_for(targets, eff["tensor_split"])
     needs, margins = _eval_fit(targets, s_norm, weights_b, units,
-                               eff["n_gpu_layers"], fp["kv_total_b"],
-                               fp["compute_b"], fp["headroom_b"])
+                               eff["n_gpu_layers"], split_b,
+                               comp_b, fp["headroom_b"])
     if moe and explicit is None and eff["n_gpu_layers"] >= units and any(m < 0 for m in margins):
         # no explicit setting: use the least RAM offload that fits the free VRAM
         def _fits_with(n):
             w = fp["weights_b"] + eff["draft_b"] - expert_bytes_offloaded(mp, info, fp["weights_b"], n)
-            _, mg = _eval_fit(targets, s_norm, w, units, units, fp["kv_total_b"],
-                              fp["compute_b"], fp["headroom_b"])
+            _, mg = _eval_fit(targets, s_norm, w, units, units, split_b,
+                              comp_b, fp["headroom_b"])
             return all(m >= 0 for m in mg)
         auto = smallest_fitting(info["n_layer"], _fits_with)
         if auto is not None:
@@ -242,24 +306,30 @@ def plan_launch(profile: dict, overrides: dict | None = None,
             weights_b = fp["weights_b"] + eff["draft_b"] - moe_ram_b
             plan["auto_n_cpu_moe"] = auto
             needs, margins = _eval_fit(targets, s_norm, weights_b, units, units,
-                                       fp["kv_total_b"], fp["compute_b"], fp["headroom_b"])
+                                       split_b, comp_b, fp["headroom_b"])
     if moe:
         plan["effective"].update(n_gpu_layers=eff["n_gpu_layers"], n_cpu_moe=eff["n_cpu_moe"])
         if "auto_n_cpu_moe" in plan:
-            fp["total_b"] = weights_b + fp["kv_total_b"] + fp["compute_b"]
+            fp["total_b"] = weights_b + split_b + comp_b
             plan["estimate"].update(weights_gb=round(weights_b / GB, 2),
                                     total_gb=round(fp["total_b"] / GB, 2))
         plan["moe"] = {"n_cpu_moe": eff["n_cpu_moe"], "experts_in_ram_gb": round(moe_ram_b / GB, 2),
                        "auto": "auto_n_cpu_moe" in plan}
-    plan["load_options"] = load_options(targets, weights_b, units, eff["n_gpu_layers"], fp["kv_total_b"],
-                                        fp["compute_b"], fp["headroom_b"])
-    for t, need, margin in zip(targets, needs, margins):
+    plan["load_options"] = load_options(targets, weights_b, units, eff["n_gpu_layers"], split_b,
+                                        comp_b, fp["headroom_b"])
+    off_frac = min(max(0, int(eff["n_gpu_layers"])), units) / max(1, units)
+    for t, s, need, margin in zip(targets, s_norm, needs, margins):
         for pd in plan["devices"]:
             if pd["index"] == t["index"]:
                 pd.update({"target": True, "need_gb": round(need / GB, 2),
                            "free_gb": round(t["free_b"] / GB, 2),
                            "margin_gb": round(margin / GB, 2),
-                           "short_gb": round(max(0.0, -margin) / GB, 2)})
+                           "short_gb": round(max(0.0, -margin) / GB, 2),
+                           "breakdown": _card_breakdown(fp, weights_b, s, off_frac)})
+    rs_per_seq = fp["recurrent_per_seq_b"]
+    checkpoints = _ctx_checkpoints(profile, eff, info) if rs_per_seq else 0
+    checkpoint_b = checkpoints * eff["n_slots"] * rs_per_seq
+    plan["effective"]["ctx_checkpoints"] = checkpoints
     host_snapshot = None
     try:
         host_snapshot = host_memory_snapshot()
@@ -270,6 +340,8 @@ def plan_launch(profile: dict, overrides: dict | None = None,
             units=units,
             cfg=cfg,
             snapshot=host_snapshot,
+            checkpoint_b=checkpoint_b,
+            checkpoints=checkpoints,
         )
     except HostMemoryQueryError as exc:
         plan["status"] = "unknown"
@@ -300,6 +372,8 @@ def plan_launch(profile: dict, overrides: dict | None = None,
                         units=units,
                         cfg=cfg,
                         snapshot=host_snapshot,
+                        checkpoint_b=checkpoint_b,
+                        checkpoints=checkpoints,
                     )
                     if not candidate_host["fit"]:
                         continue
@@ -421,8 +495,7 @@ def check_small_model_or_raise(role: str, model_path, ctx: int,
     cands = [d for d in devs if d["index"] != idx and d.get("total_gb", 0) >= 4.0]
     if cands:
         best = max(cands, key=lambda d: d["free_gb"])
-        need = (fp.get("weights_gb", 0) + fp.get("kv_gb", 0)
-                + fp.get("compute_gb", 0) + fp.get("headroom_gb", 0))
+        need = fp.get("total_gb", 0) + fp.get("headroom_gb", 0)
         extra.append({"type": "config_small_model_gpu", "value": best["index"],
                       "fits_after": best["free_gb"] >= need,
                       "desc": f"set app.json small_models.{role}.gpu = "

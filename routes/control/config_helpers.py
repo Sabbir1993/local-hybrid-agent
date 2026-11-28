@@ -28,6 +28,8 @@ _SAFE_ARG_RX = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./:\-]{0,199}$")
 # machine-level concurrency limits kept in config/app.json: key -> (section path, field, default, min, max)
 SERVING_LIMITS = {
     "max_inflight_per_user": ("serving", "max_inflight_per_user", 1, 1, 16),
+    # 1 = keep the last main-model slot for the app's own jobs (core/serving_slots.py); needs 4+ slots
+    "helper_slot": ("serving", "helper_slot", 0, 0, 1),
     "vllm_max_num_seqs_default": ("engines.vllm", "max_num_seqs", 8, 1, 64),
 }
 
@@ -238,6 +240,7 @@ def _config_for_profile(p: dict) -> dict:
         "kv_unified_per_slot": p.get("kv_unified_per_slot", CONFIG_DEFAULTS["kv_unified_per_slot"]),
         "cache_reuse": p.get("cache_reuse", CONFIG_DEFAULTS["cache_reuse"]),
         "cache_ram": p.get("cache_ram", CONFIG_DEFAULTS["cache_ram"]),
+        "ctx_checkpoints": p.get("ctx_checkpoints", CONFIG_DEFAULTS["ctx_checkpoints"]),
         "use_mmap": bool(p.get("use_mmap", CONFIG_DEFAULTS.get("use_mmap", True))),
         "keepalive_interval_s": state.keepalive_interval_s,
         "llama_bin_dir": p.get("llama_bin_dir", CONFIG_DEFAULTS["llama_bin_dir"]),
@@ -275,6 +278,7 @@ def _config_for_profile(p: dict) -> dict:
         "vllm_extra_args": p.get("vllm_extra_args") or "",
         "vllm_max_num_seqs": vllm_engine.max_num_seqs(p),
         "max_inflight_per_user": _serving_value("max_inflight_per_user"),
+        "helper_slot": _serving_value("helper_slot"),
         "vllm_max_num_seqs_default": vllm_engine.settings().get("max_num_seqs", 8),
         **_reasoning_caps(reasoning.local_mode(p.get("model_path"))),
     }
@@ -343,7 +347,7 @@ def _layer_info(model_path: str) -> dict:
     """{"total_layers", "layer_mb"} for the Model Config card, so an admin can work out how many layers fit on a GPU.
     GGUF: block_count + 1 (the output layer), which is the number "-ngl" counts up to. Model folder: num_hidden_layers.
     Both None when the file cannot be read."""
-    out = {"total_layers": None, "layer_mb": None}
+    out = {"total_layers": None, "layer_mb": None, "hybrid": False}
     if not model_path:
         return out
     try:
@@ -359,6 +363,8 @@ def _layer_info(model_path: str) -> dict:
                 return out
             if not info.get("n_layer"):
                 return out
+            from core.process import is_hybrid
+            out["hybrid"] = is_hybrid(info)      # the card explains cache reuse / checkpoints for these
             n = int(info["n_layer"]) + 1
             size_b = int(info.get("file_bytes") or 0)
         if n > 0:

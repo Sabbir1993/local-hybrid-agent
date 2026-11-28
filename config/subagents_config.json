@@ -2,5 +2,5 @@
   "subagent_default_steps": 40,
   "subagent_max_steps": 80,
   "subagent_timeout_s": 3600,
-  "subagent_max_parallel": 4
+  "subagent_max_parallel": 15
 }

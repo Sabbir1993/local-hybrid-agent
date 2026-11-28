@@ -54,7 +54,9 @@ async def agent_vision(req: VisionReq, user: Principal = Depends(get_current_use
         rid = monitor_begin("agent/vision", False, body_bytes, model=model_name, source="local")
         t0 = time.time()
         try:
-            r = await state.client.post("/v1/chat/completions", json=payload, timeout=None)
+            from core import serving_slots
+            async with serving_slots.helper_call() as extra:     # the helper slot, not a user's (serving_slots.py)
+                r = await state.client.post("/v1/chat/completions", json={**payload, **extra}, timeout=None)
             state.last_activity = time.time()
             data = r.json()
             usage = data.get("usage") or {}

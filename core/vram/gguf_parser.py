@@ -13,6 +13,10 @@ _GGUF_FMT = {0: ("<B", 1), 1: ("<b", 1), 2: ("<H", 2), 3: ("<h", 2),
 _SHARD_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$", re.I)
 
 _gguf_cache: dict = {}          # path -> ((mtime_ns, size), info)
+# {arch}.* keys read after the main header scan has stopped early (see parse_gguf_info)
+_LATE_KEYS = ("full_attention_interval", "nextn_predict_layers",
+              "ssm.state_size", "ssm.group_count", "ssm.time_step_rank",
+              "ssm.inner_size", "ssm.conv_kernel")
 _gguf_lock = threading.Lock()
 
 
@@ -231,11 +235,21 @@ def parse_gguf_info(model_path) -> "dict | None":
     # layer; the rest hold a small fixed recurrent state. The key sits after the early exit
     # above, so it is read separately. Failing to read it is the safe direction: every layer
     # is then charged KV, which can only over-estimate.
+    #
+    # The same late read picks up the recurrent-state shape (`{arch}.ssm.*`) and the number of
+    # MTP/nextn layers. block_count INCLUDES the nextn layers (Qwen3.8-27B: 65 = 64 + 1), and
+    # those are neither recurrent nor part of the main KV pattern, so they are taken out first.
     n_kv_layers = int(n_layer)
-    interval = read_gguf_scalars(first, [f"{arch}.full_attention_interval"]).get(
-        f"{arch}.full_attention_interval") if parse_err is None else None
+    late = read_gguf_scalars(first, [f"{arch}.{k}" for k in _LATE_KEYS]) if parse_err is None else {}
+    interval = late.get(f"{arch}.full_attention_interval")
+    nextn = late.get(f"{arch}.nextn_predict_layers")
+    nextn = int(nextn) if isinstance(nextn, int) and 0 < nextn < int(n_layer) else 0
     if isinstance(interval, int) and interval > 1:
-        n_kv_layers = max(1, int(n_layer) // interval)
+        n_kv_layers = max(1, (int(n_layer) - nextn) // interval)
+    recurrent = None
+    ssm = {k.split(".", 1)[1]: late.get(f"{arch}.{k}") for k in _LATE_KEYS if k.startswith("ssm.")}
+    if isinstance(ssm.get("state_size"), int) and isinstance(ssm.get("inner_size"), int):
+        recurrent = {k: int(v) if isinstance(v, int) else 0 for k, v in ssm.items()}
 
     info = {"arch": arch,
             "n_layer": int(n_layer), "n_head": int(n_head) if n_head else None,
@@ -245,6 +259,8 @@ def parse_gguf_info(model_path) -> "dict | None":
             "n_expert": int(scalar(f"{arch}.expert_count", default=0) or 0),
             "n_expert_used": int(n_expert_used or 0),
             "n_kv_layers": n_kv_layers,
+            "n_nextn_layers": nextn,
+            "recurrent": recurrent,
             "n_vocab": raw.get("n_vocab"), "file_bytes": total_b,
             "complete": complete, "model_path": str(p), "error": parse_err}
     with _gguf_lock:

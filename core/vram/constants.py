@@ -10,6 +10,17 @@ _KV_BYTES_PER_ELEM = {
     "q8_0": 34 / 32, "q5_0": 22 / 32, "q4_0": 18 / 32
 }
 
+# Recurrent (SSM / Gated-DeltaNet) state is kept in f32 by llama.cpp (-ctk/-ctv do not apply to it).
+_RS_BYTES_PER_ELEM = 4
+# llama-server's own -ctxcp default (context checkpoints per slot) when the launch passes none.
+_LLAMA_DEFAULT_CTX_CHECKPOINTS = 32
+# llama-server's -np auto (no -np passed) resolves to 4 slots.
+_LLAMA_AUTO_SLOTS = 4
+# KV type of a draft/MTP model: the launcher passes no -ctkd/-ctvd, and llama-server defaults those to f16.
+_DRAFT_KV_TYPE = "f16"
+# Draft-model compute buffer when its vocabulary is unknown (not measured; a conservative allowance).
+_DRAFT_COMPUTE_FALLBACK_GB = 0.5
+
 _DEFAULT_HEADROOM_GB = 1.0
 # Intel SYCL needs scratch memory beyond the weights/KV/compute estimate; a 1 GB margin there ends in a segfault
 # (llama-server exit -11) instead of a clean out-of-memory error

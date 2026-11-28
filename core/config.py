@@ -133,6 +133,9 @@ CONFIG_DEFAULTS = {
     "kv_unified_per_slot": 0,  # cap one conversation's share of the unified pool (0 = no cap)
     "cache_reuse": 256,        # --cache-reuse: min chunk to reuse from cache via KV shifting
     "cache_ram": 0,            # -cram MiB host-RAM prompt cache (0 = 2048 default, see process.MAIN_CACHE_RAM_MB; -1 = no limit)
+    # -ctxcp context checkpoints per slot. 0 = automatic: process.HYBRID_CTX_CHECKPOINTS for hybrid models (each
+    # checkpoint holds a slot's whole recurrent state, ~150 MiB for Qwen3.8-27B), llama-server's own default (32) otherwise
+    "ctx_checkpoints": 0,
     "use_mmap": True,          # memory-map model file (True = default/auto, False = --load-mode none to free system RAM)
     "keepalive_interval_s": 25,
     "gpu_devices": [1, 2],
@@ -450,7 +453,7 @@ def apply_runtime(profile: dict) -> dict:
 
 # Key -> (min, max) for integer launch params; 0 = "omit, use llama default"
 CONFIG_INT_FIELDS = {
-    "context_size": (512, 1048576),
+    "context_size": (512, 2097152),         # 2M: 15 users x 128K in one unified pool
     "n_gpu_layers": (0, 999),
     "threads": (0, 64),
     "threads_batch": (0, 64),
@@ -458,7 +461,8 @@ CONFIG_INT_FIELDS = {
     "ubatch_size": (0, 4096),
     "n_slots": (0, 64),
     "mtp_draft_n_max": (1, 16),
-    "kv_unified_per_slot": (0, 1048576),
+    "kv_unified_per_slot": (0, 2097152),
+    "ctx_checkpoints": (0, 64),
     "cache_reuse": (0, 4096),
     "cache_ram": (-1, 49152),               # -1 = no limit
     # vLLM engine (core/engines/vllm.py); gpu_memory_utilization_pct 0 = engines.vllm default
@@ -493,6 +497,7 @@ CONFIG_TARGETS = {
     "kv_unified_per_slot": (None, "kv_unified_per_slot"),
     "cache_reuse": (None, "cache_reuse"),
     "cache_ram": (None, "cache_ram"),
+    "ctx_checkpoints": (None, "ctx_checkpoints"),
     "engine": (None, "engine"),
     "tensor_parallel_size": (None, "tensor_parallel_size"),
     "pipeline_parallel_size": (None, "pipeline_parallel_size"),
@@ -507,7 +512,7 @@ MODEL_CONFIG_KEYS = (
     "batch_size", "ubatch_size", "n_slots", "tensor_split", "split_mode",
     "flash_attn", "kv_cache_type", "mtp_enabled", "mtp_draft_n_max",
     "keepalive_interval_s", "gpu_devices", "vision_capable",
-    "kv_unified", "kv_unified_per_slot", "cache_reuse", "cache_ram",
+    "kv_unified", "kv_unified_per_slot", "cache_reuse", "cache_ram", "ctx_checkpoints",
     "use_mmap", "op_offload",
     # vLLM engine (main model only); see core/engines/vllm.py
     "engine", "tensor_parallel_size", "pipeline_parallel_size", "gpu_memory_utilization_pct",

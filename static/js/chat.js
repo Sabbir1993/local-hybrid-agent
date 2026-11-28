@@ -1256,8 +1256,10 @@ async function send(inputText) {
       } else if (ev === 'custom_agent') {
         L.customAgent = d;
       } else if (ev === 'queued') {
-        // all local model slots busy: routes/common.py admission gate
-        L.statusText = '⏳ Waiting for a free model slot' + (d.position ? ` (#${d.position} in queue)` : '') + '...';
+        // all local model slots busy (admission gate), or the shared memory pool is full (core/serving_slots.py)
+        L.statusText = d.reason === 'memory'
+          ? '⏳ Waiting for model memory: other long conversations are running' + (d.position ? ` (#${d.position})` : '') + '...'
+          : '⏳ Waiting for a free model slot' + (d.position ? ` (#${d.position} in queue)` : '') + '...';
       } else if (ev === 'delta') {
         L.content += (d.text || '');
         L.statusText = '';

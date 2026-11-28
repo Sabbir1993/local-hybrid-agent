@@ -28,6 +28,30 @@ def _run(chunks, reasoning=None):
     return events[:-1], events[-1][1]
 
 
+class MidStreamErrorTests(unittest.TestCase):
+    """llama-server answers HTTP 200, then sends an error chunk when running requests overflow the shared KV pool.
+    That used to be skipped (no "choices"), so the user got an empty answer and no error."""
+
+    def test_error_chunk_is_raised(self):
+        resp = _FakeResp(["partial "])
+        resp.lines.insert(1, "data: " + json.dumps(
+            {"error": {"code": 500, "message": "Context size has been exceeded.", "type": "server_error"}}))
+
+        async def go():
+            return [item async for item in _process_sse_stream(resp)]
+        with self.assertRaises(RuntimeError) as cm:
+            asyncio.run(go())
+        self.assertIn("Context size has been exceeded", str(cm.exception))
+
+    def test_normal_chunks_with_an_error_key_but_choices_still_stream(self):
+        resp = _FakeResp(["fine"])
+        resp.lines[0] = "data: " + json.dumps({"choices": [{"delta": {"content": "fine"}}], "error": None})
+
+        async def go():
+            return [item async for item in _process_sse_stream(resp)]
+        self.assertEqual(asyncio.run(go())[-1][1]["content"], "fine")
+
+
 class ThinkStreamTests(unittest.TestCase):
     def test_orphan_close_moves_streamed_text_to_reasoning(self):
         evs, res = _run(["Let me build ", "the PDF now.", "\n</think>\n\n", "Here is the deck."])

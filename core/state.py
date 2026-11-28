@@ -701,7 +701,8 @@ async def keepalive_loop():
         try:
             # Pin the ping to the last slot so, with -np > 1, it doesn't land on
             # (and overwrite) whichever slot holds the most recent user's cached
-            # conversation prefix. With -np 1 there is no spare slot to use.
+            # conversation prefix. With 4+ slots that is the reserved helper slot, which no
+            # user is ever given (core/serving_slots.py). With -np 1 there is no spare slot.
             await state.client.post("/completion", json={
                 "prompt": keepalive_prompt(state.profile),
                 "n_predict": 1,

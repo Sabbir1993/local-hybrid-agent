@@ -198,12 +198,12 @@ class LayerInfoTests(unittest.TestCase):
         from routes.control import config_helpers as ch
         with mock.patch("core.vram.gguf_parser.parse_gguf_info",
                         return_value={"n_layer": 48, "file_bytes": 49 * 400 * 1048576, "stat_ok": True, "complete": True}):
-            self.assertEqual(ch._layer_info("/m/x.gguf"), {"total_layers": 49, "layer_mb": 400})
+            self.assertEqual(ch._layer_info("/m/x.gguf"), {"total_layers": 49, "layer_mb": 400, "hybrid": False})
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "config.json").write_text(json.dumps({"num_hidden_layers": 64}))
             (Path(d) / "model.safetensors").write_bytes(b"x" * 64 * 1048576)
-            self.assertEqual(ch._layer_info(d), {"total_layers": 64, "layer_mb": 1})
-        self.assertEqual(ch._layer_info("/nope/missing.gguf"), {"total_layers": None, "layer_mb": None})
+            self.assertEqual(ch._layer_info(d), {"total_layers": 64, "layer_mb": 1, "hybrid": False})
+        self.assertEqual(ch._layer_info("/nope/missing.gguf"), {"total_layers": None, "layer_mb": None, "hybrid": False})
 
 
 class ExitReasonTests(unittest.TestCase):

@@ -14,6 +14,30 @@ from .vram.devices import resolve_device_ids
 
 IS_WINDOWS = os.name == "nt"
 MAIN_CACHE_RAM_MB = 2048     # -cram when a profile sets none (llama's own default is 8192 MiB of host RAM)
+# -ctxcp for a hybrid model (recurrent + attention layers, e.g. qwen35) when the profile leaves it on automatic. Each
+# checkpoint is a copy of the slot's recurrent state (~150 MiB for Qwen3.8-27B); llama's default of 32 per slot would
+# be ~70 GB of host RAM at 15 slots. The prompt only grows at its end here (core/prompt_sticky.py), so few are needed.
+HYBRID_CTX_CHECKPOINTS = 4
+
+
+def is_hybrid(gguf: Optional[dict]) -> bool:
+    """A model whose KV cache covers only some layers (the rest keep a recurrent state): qwen35, Jamba-style hybrids."""
+    try:
+        n_kv, n_layer = int((gguf or {}).get("n_kv_layers") or 0), int((gguf or {}).get("n_layer") or 0)
+    except (TypeError, ValueError):
+        return False
+    return 0 < n_kv < n_layer
+
+
+def ctx_checkpoints_for(profile: dict, gguf: Optional[dict]) -> int:
+    """-ctxcp value to pass, or 0 to leave llama-server's default."""
+    try:
+        v = int(profile.get("ctx_checkpoints") or 0)
+    except (TypeError, ValueError):
+        v = 0
+    if v > 0:
+        return v
+    return HYBRID_CTX_CHECKPOINTS if is_hybrid(gguf) else 0
 
 
 def kill_process_tree(proc: Optional[subprocess.Popen], timeout: float = 15) -> None:
@@ -387,10 +411,15 @@ def build_launch_command(profile: dict) -> list[str]:
         cmd += ["-kvu"]
         if per_slot_cap(profile):
             cmd += ["--kv-unified-per-slot", str(per_slot_cap(profile))]
-    if profile.get("cache_reuse"):
+    # a hybrid model cannot shift its recurrent state, so llama-server ignores --cache-reuse there ("not supported by
+    # this context"); leave it out rather than imply a reuse that never happens
+    if profile.get("cache_reuse") and not is_hybrid(gguf):
         cmd += ["--cache-reuse", str(profile["cache_reuse"])]
     # an unset/0 profile value used to mean llama's own 8192 MiB host-RAM prompt cache: bound it (-1 = no limit)
     cmd += ["-cram", str(profile.get("cache_ram") or MAIN_CACHE_RAM_MB)]
+    ctxcp = ctx_checkpoints_for(profile, gguf)
+    if ctxcp > 0:
+        cmd += ["-ctxcp", str(ctxcp)]
     if n_cpu_moe > 0:
         cmd += ["-ncmoe", str(n_cpu_moe)]
     # Expert weights left in RAM (a partial -ngl or -ncmoe): llama.cpp normally copies them to the

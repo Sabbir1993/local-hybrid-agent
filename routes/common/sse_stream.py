@@ -86,6 +86,15 @@ async def _process_sse_stream(response, rid: Optional[int] = None):
         except Exception:
             continue
 
+        # an error after the HTTP 200: llama-server sends `data: {"error": {"code": 500, "message": "Context size has
+        # been exceeded."}}` when running requests overflow the shared KV pool (measured, b12810). It has no "choices",
+        # so it used to be skipped and the user got an empty answer with no error. Report it like any failed call.
+        if data.get("error") and not data.get("choices"):
+            err = data["error"]
+            msg = (err.get("message") or err.get("type") or "error") if isinstance(err, dict) else str(err)
+            code = err.get("code") if isinstance(err, dict) else None
+            raise RuntimeError(f"upstream {code or 'stream'}: {str(msg)[:200]}")
+
         if isinstance(data.get("usage"), dict):
             last_usage = data["usage"]
         if isinstance(data.get("timings"), dict):

@@ -59,7 +59,7 @@ async def preflight(target: Optional[str] = None, engine: Optional[str] = None,
             return vllm_engine.preflight(profile)
         loop = asyncio.get_event_loop()
         overrides = {}
-        if ctx is not None and 512 <= ctx <= 1048576:
+        if ctx is not None and 512 <= ctx <= 2097152:
             overrides["context_size"] = int(ctx)
         if ngl is not None and 0 <= ngl <= 999:
             overrides["n_gpu_layers"] = int(ngl)

@@ -58,7 +58,8 @@ class SnapshotNulls(unittest.TestCase):
         with mock.patch.object(tm, "get_gpu_stats", mock.AsyncMock(return_value=gpu_stats)), \
              mock.patch.object(tm, "get_gpu_sensors", mock.AsyncMock(return_value=sensors)), \
              mock.patch.object(tm.state, "process", None, create=True), \
-             mock.patch.object(tm, "_monitor_state", {"active": {}, "recent": []}):
+             mock.patch.object(tm, "_monitor_state", {"active": {}, "recent": []}), \
+             mock.patch.object(tm, "_snap", None):       # a fresh snapshot, not the shared one of the last tick
             return asyncio.run(tm.get_telemetry_snapshot())
 
     def test_no_sensor_yields_null_temp_power_pcie(self):

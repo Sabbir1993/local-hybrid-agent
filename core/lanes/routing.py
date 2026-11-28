@@ -126,7 +126,14 @@ async def post_chat(job: str, payload: dict, user_id: Optional[int] = None,
         rid, t0 = _account_begin(job, t)
         try:
             c = await t.client()
-            r = await c.post("/v1/chat/completions", json=payload, timeout=timeout)
+            if t.lane == "main" and not t.cm:
+                # an app job on the local main model: the reserved helper slot (core/serving_slots.py), so it never
+                # takes a user's slot or overwrites a user's cached conversation
+                from .. import serving_slots
+                async with serving_slots.helper_call() as extra:
+                    r = await c.post("/v1/chat/completions", json={**payload, **extra}, timeout=timeout)
+            else:
+                r = await c.post("/v1/chat/completions", json=payload, timeout=timeout)
             r.raise_for_status()
             data = r.json()
             _account_end(job, t, rid, t0, 200, data)

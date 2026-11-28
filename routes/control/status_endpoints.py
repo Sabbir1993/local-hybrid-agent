@@ -89,23 +89,23 @@ async def get_system_status(user: Optional[Principal] = None) -> dict:
     ctx_info = {"n_ctx": 32768, "n_past": 0, "n_prompt": 0, "pct": 0.0}
     if state.process and state.process.poll() is None:
         try:
-            resp = await state.client.get("/slots", timeout=1.5)
-            if resp.status_code == 200:
-                slots = resp.json()
-                if slots and isinstance(slots, list):
-                    # show the caller's own slot (routes/common.py slot affinity)
-                    s0 = slots[user.id % len(slots)] if user and user.id is not None else slots[0]
-                    n_ctx = s0.get("n_ctx") or 32768
-                    n_prompt = s0.get("n_prompt_tokens") or 0
-                    n_decoded = (s0.get("next_token") or [{}])[0].get("n_decoded") or 0
-                    n_past = n_prompt + n_decoded
-                    pct = round((n_past / max(1, n_ctx)) * 100, 1)
-                    ctx_info = {
-                        "n_ctx": n_ctx,
-                        "n_past": n_past,
-                        "n_prompt": n_prompt,
-                        "pct": pct
-                    }
+            from core import serving_slots
+            slots = await serving_slots.main_slots()          # shared by every viewer, at most 1 s old
+            if slots:
+                # show the caller's own slot: the sticky slot table (core/serving_slots.py) knows which one
+                s0 = (slots[min(len(slots) - 1, serving_slots.user_slot(user.id, len(slots)))]
+                      if user and user.id is not None else slots[0])
+                n_ctx = s0.get("n_ctx") or 32768
+                n_prompt = s0.get("n_prompt_tokens") or 0
+                n_decoded = (s0.get("next_token") or [{}])[0].get("n_decoded") or 0
+                n_past = n_prompt + n_decoded
+                pct = round((n_past / max(1, n_ctx)) * 100, 1)
+                ctx_info = {
+                    "n_ctx": n_ctx,
+                    "n_past": n_past,
+                    "n_prompt": n_prompt,
+                    "pct": pct
+                }
         except Exception:
             pass
 

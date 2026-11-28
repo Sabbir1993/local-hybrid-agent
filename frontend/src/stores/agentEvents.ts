@@ -114,8 +114,11 @@ export function applyAgentEvent(L: ChatMessage, S: AgentRunState, ev: string, d:
       S.gap = true;
       break;
     case 'queued':
-      // all local model slots are busy: the server's admission gate
-      L.statusText = '⏳ Waiting for a free model slot' + (d.position ? ` (#${d.position} in queue)` : '') + '...';
+      // all local model slots are busy (admission gate), or the shared memory pool is taken by long conversations
+      // (pool guard, core/serving_slots.py): it starts as soon as enough of them finish
+      L.statusText = d.reason === 'memory'
+        ? '⏳ Waiting for model memory: other long conversations are running' + (d.position ? ` (#${d.position})` : '') + '...'
+        : '⏳ Waiting for a free model slot' + (d.position ? ` (#${d.position} in queue)` : '') + '...';
       break;
     case 'run':
       S.runId = d.run_id;

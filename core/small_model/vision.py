@@ -41,7 +41,9 @@ async def describe_image_bytes(data: bytes, question: str = "Describe this image
         from ..state import state
         main_ready = (state.process is not None and state.process.poll() is None and state.client is not None)
         if not explicit and main_ready and bool((state.profile or {}).get("vision_capable")):
-            r = await state.client.post("/v1/chat/completions", json=payload, timeout=None)
+            from .. import serving_slots
+            async with serving_slots.helper_call() as extra:     # the helper slot, not a user's (serving_slots.py)
+                r = await state.client.post("/v1/chat/completions", json={**payload, **extra}, timeout=None)
             state.last_activity = time.time()
             data = r.json()
             return ((data.get("choices") or [{}])[0].get("message", {}).get("content")

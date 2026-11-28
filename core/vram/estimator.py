@@ -2,14 +2,77 @@ from pathlib import Path
 
 from ..backend import device_prefix
 from ..config import CONFIG_DEFAULTS, normalize_tensor_split
-from .constants import GB, _KV_BYTES_PER_ELEM, _preflight_cfg
+from .constants import (GB, _DRAFT_COMPUTE_FALLBACK_GB, _DRAFT_KV_TYPE, _KV_BYTES_PER_ELEM,
+                        _LLAMA_AUTO_SLOTS, _RS_BYTES_PER_ELEM, _preflight_cfg)
 from .gguf_parser import parse_gguf_info
+
+
+def recurrent_state_bytes(info: dict) -> int:
+    """Bytes of recurrent state ONE sequence (one slot) holds, 0 for a model without `{arch}.ssm.*` keys.
+
+    llama.cpp keeps, per recurrent layer and per sequence, two f32 tensors (llama_memory_recurrent):
+      - the SSM / Gated-DeltaNet state. Gated-DeltaNet (qwen35) holds one head_k x head_v matrix per value
+        head: time_step_rank x head_k x head_v, with head_k = ssm.state_size and
+        head_v = ssm.inner_size / time_step_rank. That equals state_size x inner_size, which is also
+        llama.cpp's n_embd_s() for Mamba/Mamba-2, so the one formula covers both.
+      - the conv state: (conv_kernel - 1) x (inner_size + 2 x group_count x state_size).
+    Recurrent layers = n_layer - MTP/nextn layers - KV (full-attention) layers.
+
+    Qwen3.8-27B (state 128, inner 6144, rank 48, groups 16, kernel 4, 65 blocks = 64 + 1 nextn, 16 KV):
+      state 48 x 128 x 128 x 4 = 3 MiB, conv 3 x (6144 + 4096) x 4 = 120 KiB, x 48 layers = ~149.6 MiB.
+
+    A model with ssm keys but no full_attention_interval (pure Mamba, or a hybrid laid out some other way)
+    gets every layer charged as recurrent; its KV is charged on every layer too, so both err high.
+    """
+    r = info.get("recurrent") or {}
+    d_state = int(r.get("state_size") or 0)
+    d_inner = int(r.get("inner_size") or 0)
+    if d_state <= 0 or d_inner <= 0:
+        return 0
+    n_layer = int(info.get("n_layer") or 0)
+    nextn = int(info.get("n_nextn_layers") or 0)
+    n_kv = int(info.get("n_kv_layers") or n_layer)
+    linear = n_layer - nextn - n_kv
+    if linear <= 0:
+        linear = max(0, n_layer - nextn)
+    rank = int(r.get("time_step_rank") or 0)
+    if rank > 0 and d_inner % rank == 0:
+        ssm_elems = rank * d_state * (d_inner // rank)        # Gated-DeltaNet: heads x head_k x head_v
+    else:
+        ssm_elems = d_state * d_inner
+    kernel = int(r.get("conv_kernel") or 0)
+    conv_elems = max(0, kernel - 1) * (d_inner + 2 * int(r.get("group_count") or 0) * d_state)
+    return linear * (ssm_elems + conv_elems) * _RS_BYTES_PER_ELEM
+
+
+def estimate_draft(draft_info: dict | None, ctx: int, ubatch: int = 512) -> dict:
+    """VRAM of an MTP draft model beyond its file: its own KV cache and compute buffer.
+
+    KV: attention layers x n_head_kv x head_dim x 2 (K and V) x bytes x context. An MTP file carries the full
+    model header (block_count 65 for Qwen3.8-27B) but only the nextn layer(s) run, so the attention layers are
+    `nextn_predict_layers` when present. The draft context is the main -c (llama-server's default when -cd is
+    not passed), in f16 (no -ctkd is passed). Compute: the draft's own logits for a ubatch (+15% scratch), as
+    for the main model, without the main model's 0.30 GB base; a flat allowance when the vocab is unknown.
+    """
+    if not draft_info:
+        return {"kv_b": 0, "kv_per_token_b": 0, "compute_b": 0, "layers": 0}
+    layers = int(draft_info.get("n_nextn_layers") or 0) or int(
+        draft_info.get("n_kv_layers") or draft_info.get("n_layer") or 1)
+    per_tok = layers * int(draft_info.get("n_head_kv") or 0) * int(draft_info.get("head_dim") or 0) \
+        * 2 * _KV_BYTES_PER_ELEM[_DRAFT_KV_TYPE]
+    n_vocab = int(draft_info.get("n_vocab") or 0)
+    ub = max(1, int(ubatch or 512))
+    compute_b = (int(n_vocab * ub * 4 * 1.15) if n_vocab > 0
+                 else int(_DRAFT_COMPUTE_FALLBACK_GB * GB))
+    return {"kv_b": int(per_tok * max(0, int(ctx))), "kv_per_token_b": int(per_tok),
+            "compute_b": compute_b, "layers": layers}
 
 
 def estimate_footprint(info: dict, ctx: int, kv_type: str = "f16",
                        ubatch: int = 512, flash_attn: str = "auto",
                        headroom_gb: float | None = None,
-                       n_cpu_moe: int = 0, n_expert_used: int | None = None) -> dict:
+                       n_cpu_moe: int = 0, n_expert_used: int | None = None,
+                       n_seqs: int = 1) -> dict:
     """bytes for {weights, kv_total, compute, headroom} + confidence label.
 
     The compute buffer used to be `0.30 GB + 2048 * 8 * ubatch`, which models llama.cpp's
@@ -30,6 +93,10 @@ def estimate_footprint(info: dict, ctx: int, kv_type: str = "f16",
     ctx 65536) was sized at 8.8 GB against a real ~3.1 GB, and the main profile (ctx 231072)
     came out "nofit" on a 15.1 GB card and could not be loaded at all, for a model whose real
     KV cache is tens of MB. Every 2024+ hybrid-attention GGUFs ship with this key.
+
+    Recurrent state (hybrid models such as qwen35): a fixed amount per sequence, independent of -c, held for
+    every slot (`n_seqs`, at least 1). See recurrent_state_bytes. Reported as its own item (recurrent_b), not
+    folded into kv_total_b, so the KV-only suggestions (q8_0 KV, shorter context) keep their meaning.
     """
     cfg = _preflight_cfg()
     if headroom_gb is None:
@@ -82,8 +149,12 @@ def estimate_footprint(info: dict, ctx: int, kv_type: str = "f16",
     confidence = "high" if info.get("complete") else "low"
     if not n_vocab:
         confidence = "low"
+    rs_per_seq_b = recurrent_state_bytes(info)
+    n_seqs = max(1, int(n_seqs or 1))
     return {"weights_b": weights_b, "kv_per_token_b": int(kv_per_token_b),
             "kv_total_b": kv_total_b, "compute_b": compute_b,
+            "recurrent_per_seq_b": rs_per_seq_b, "recurrent_b": rs_per_seq_b * n_seqs,
+            "n_seqs": n_seqs,
             "headroom_b": int(headroom_gb * GB),
             "moe_offloaded_b": moe_offloaded_b,
             "sliding_window": sw or None, "effective_ctx": effective_ctx,
@@ -134,6 +205,20 @@ def effective_params(profile: dict, overrides: dict | None = None) -> dict:
 
     gpu_devices, tensor_split = normalize_tensor_split(tensor_split, gpu_devices)
 
+    # -np: unset/0 means the launcher passes no -np and llama-server's auto picks 4 slots
+    try:
+        n_slots = int(pick("n_slots", 0) or 0)
+    except (TypeError, ValueError):
+        n_slots = 0
+    n_slots = n_slots if n_slots > 0 else _LLAMA_AUTO_SLOTS
+    try:
+        ctx_checkpoints = int(pick("ctx_checkpoints", 0) or 0)
+    except (TypeError, ValueError):
+        ctx_checkpoints = 0
+    mtp_draft_path = None
+    if profile.get("mtp_enabled") and profile.get("mtp_draft_path") and Path(str(profile["mtp_draft_path"])).exists():
+        mtp_draft_path = str(profile["mtp_draft_path"])
+
     draft_b = 0
     for flag, key in (("mtp_enabled", "mtp_draft_path"), ("vision_capable", "mmproj_path")):
         if profile.get(flag) and profile.get(key):
@@ -162,6 +247,8 @@ def effective_params(profile: dict, overrides: dict | None = None) -> dict:
             "cache_ram_mb": max(0, cache_ram_mb),
             "cache_ram_unbounded": cache_ram_mb < 0,
             "draft_b": draft_b, "n_cpu_moe": n_cpu_moe,
+            "n_slots": n_slots, "ctx_checkpoints": max(0, ctx_checkpoints),
+            "mtp_draft_path": mtp_draft_path,
             "n_cpu_moe_set": n_cpu_moe_set}
 
 
@@ -308,9 +395,14 @@ def _build_suggestions(target_devs, eff, info, fp, s_norm, units):
     sug = []
     weights_b = fp["weights_b"] + eff["draft_b"]
     kv_b = fp["kv_total_b"]
-    comp, hr = fp["compute_b"], fp["headroom_b"]
-    fit = lambda ngl, kv=kv_b, sh=None, w=weights_b: _fits(
-        target_devs, sh or s_norm, w, units, ngl, kv, comp, hr)
+    # split across the cards like KV but not changed by these suggestions (recurrent state) or only by the
+    # context size (the MTP draft's KV, which stays f16)
+    rs_b = int(fp.get("recurrent_b") or 0)
+    mtp_kv_b = int(fp.get("mtp_kv_b") or 0)
+    mtp_per_tok = int(fp.get("mtp_kv_per_token_b") or 0)
+    comp, hr = fp["compute_b"] + int(fp.get("mtp_compute_b") or 0), fp["headroom_b"]
+    fit = lambda ngl, kv=kv_b, sh=None, w=weights_b, mtp=mtp_kv_b: _fits(
+        target_devs, sh or s_norm, w, units, ngl, kv + rs_b + mtp, comp, hr)
 
     # 1) unload a co-tenant small model
     for role, inst in _small_models_loaded():
@@ -326,7 +418,7 @@ def _build_suggestions(target_devs, eff, info, fp, s_norm, units):
             continue
         _, sim_margins = _eval_fit(sim, s_norm, weights_b, units,
                                    min(eff["n_gpu_layers"], units),
-                                   kv_b, comp, hr)
+                                   kv_b + rs_b + mtp_kv_b, comp, hr)
         device_id = next((d.get("id") for d in target_devs
                           if d.get("index") == dev_idx and d.get("id")), None)
         device_id = device_id or f"{device_prefix(eff['backend'])}{dev_idx}"
@@ -355,7 +447,7 @@ def _build_suggestions(target_devs, eff, info, fp, s_norm, units):
             new_s = [a / tot for a in avail]
             new_split = _shares_str(new_s)
             if new_split != eff["tensor_split"]:
-                wkv = weights_b + kv_b
+                wkv = weights_b + kv_b + rs_b + mtp_kv_b
                 ok = all(wkv * s <= a for s, a in zip(new_s, avail))
                 sug.append({"type": "tensor_split", "value": new_split,
                             "fits_after": ok,
@@ -379,14 +471,15 @@ def _build_suggestions(target_devs, eff, info, fp, s_norm, units):
     # 5) reduce context
     kvcap = None
     for d, s in zip(target_devs, s_norm):
-        cap = (d["free_b"] - comp - hr - weights_b * s) / max(s, 1e-6)
+        cap = (d["free_b"] - comp - hr - weights_b * s) / max(s, 1e-6) - rs_b
         kvcap = cap if kvcap is None else min(kvcap, cap)
-    if kvcap and kvcap > 0 and fp["kv_per_token_b"] > 0:
-        ctx_new = int(kvcap / fp["kv_per_token_b"])
+    per_tok = fp["kv_per_token_b"] + mtp_per_tok
+    if kvcap and kvcap > 0 and per_tok > 0:
+        ctx_new = int(kvcap / per_tok)
         ctx_new = max(2048, (ctx_new // 1024) * 1024)
         if ctx_new < eff["context_size"]:
             kv_new = int(fp["kv_per_token_b"] * ctx_new)
-            ok = fit(units, kv=kv_new)
+            ok = fit(units, kv=kv_new, mtp=mtp_per_tok * ctx_new)
             sug.append({"type": "context_size", "value": ctx_new,
                         "fits_after": ok,
                         "desc": f"context_size {ctx_new} (KV {kv_b / GB:.1f} -> {kv_new / GB:.1f} GB, keeps full GPU offload)"})

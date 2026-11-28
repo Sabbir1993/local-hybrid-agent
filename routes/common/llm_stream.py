@@ -3,12 +3,14 @@ import contextvars
 import json
 import sys
 import time
+from collections import deque
 from contextlib import asynccontextmanager
 from typing import Optional
 
 import httpx
 
 from core import reasoning
+from core import serving_slots
 from core.agent_loop import safe_parse_and_repair_args
 from core.limits import cloud_gate
 from core.llm_messages import normalize_system_messages
@@ -22,20 +24,18 @@ from .overflow import _is_context_overflow, _recover_context
 from .sse_stream import _process_sse_stream
 
 
-# Generations in flight per llama-server slot id, and the slot the current request was given (see _choose_slot).
-_slot_inflight: dict = {}
+# Generations in flight per slot live in the sticky slot table (core/serving_slots.py); the slot the current request
+# was given is kept here so the payload builder (_main_slot_fields) pins the same one.
+_slot_inflight: dict = serving_slots.table.inflight
 _slot_choice: contextvars.ContextVar = contextvars.ContextVar("main_slot_choice", default=None)
 
 
 def _choose_slot(uid, n_slots: int) -> int:
-    """The user's own slot (uid % n_slots) keeps their conversation prefix cached between turns. When that slot is already
-    generating for the same user (a second tab, a second chat, a parallel agent run) the request goes to a free slot instead:
-    pinned to the busy one, llama-server would hold it back with 0 tokens although the other slots sit idle."""
-    pref = int(uid) % n_slots
-    if not _slot_inflight.get(pref):
-        return pref
-    free = [i for i in range(n_slots) if not _slot_inflight.get(i)]
-    return free[-1] if free else pref
+    """The user's own slot keeps their conversation prefix cached between turns (sticky table, core/serving_slots.py).
+    When it is already generating for the same user (a second tab, a parallel agent run) a free slot is borrowed:
+    pinned to the busy one, llama-server would hold it back with 0 tokens although other slots sit idle. The helper
+    slot (the last one, with 4+ slots) is never given to a user."""
+    return serving_slots.table.choose(uid, serving_slots.user_slot_count(n_slots))
 
 
 def _main_slot_fields() -> dict:
@@ -47,7 +47,11 @@ def _main_slot_fields() -> dict:
     uid = get_current_user_id()
     if n_slots > 1 and uid is not None and (APP_CONFIG.get("serving") or {}).get("slot_affinity", True):
         chosen = _slot_choice.get()
-        fields["id_slot"] = int(chosen) if chosen is not None else int(uid) % n_slots
+        if chosen is None:
+            chosen = serving_slots.table.slot_of.get(uid)
+        if chosen is None:
+            chosen = int(uid) % serving_slots.user_slot_count(n_slots)
+        fields["id_slot"] = int(chosen)
     return fields
 
 
@@ -68,6 +72,40 @@ class _Admission:
         self._users_seen: dict = {}          # uid -> last request time, for pruning
         self._users_n = 0
         self.waiting = 0
+        # queue order and recent timings, for live queue positions and telemetry (core/telemetry.py)
+        self._next_ticket = 0
+        self._tickets: set = set()
+        self.recent_waits: deque = deque(maxlen=200)     # (end time, seconds waited) per admitted request
+        self.recent_ttft: deque = deque(maxlen=200)      # (end time, seconds to the first token)
+
+    def enter_queue(self) -> int:
+        self._next_ticket += 1
+        self._tickets.add(self._next_ticket)
+        self.waiting = len(self._tickets)
+        return self._next_ticket
+
+    def leave_queue(self, ticket: int) -> None:
+        self._tickets.discard(ticket)
+        self.waiting = len(self._tickets)
+
+    def position(self, ticket: int) -> int:
+        """1 = next in line (requests that started waiting earlier and are still waiting, plus this one)."""
+        return 1 + sum(1 for t in self._tickets if t < ticket)
+
+    def stats(self, window_s: float = 300.0) -> dict:
+        now = time.time()
+        waits = [w for t, w in self.recent_waits if now - t <= window_s]
+        ttft = [w for t, w in self.recent_ttft if now - t <= window_s]
+
+        def pct(xs, q):
+            if not xs:
+                return None
+            xs = sorted(xs)
+            return round(xs[min(len(xs) - 1, int(q * len(xs)))], 2)
+        return {"queue_depth": self.waiting, "in_flight": max(0, self._global_n - (self._global._value if self._global else self._global_n)),
+                "slots": self._global_n, "requests_5m": len(waits),
+                "wait_avg_s": round(sum(waits) / len(waits), 2) if waits else None, "wait_p95_s": pct(waits, 0.95),
+                "ttft_avg_s": round(sum(ttft) / len(ttft), 2) if ttft else None, "ttft_p95_s": pct(ttft, 0.95)}
 
     # a per-user semaphore is tiny, but _users was never pruned: one entry per user id that
     # ever made a request, kept for the life of the process. Pruned on access, so an idle app
@@ -89,8 +127,8 @@ class _Admission:
                 self._users_seen.pop(uid, None)
 
     def _sems(self, uid):
-        n = max(1, int((getattr(state, "launch_info", None) or {}).get("n_slots")
-                       or (state.profile or {}).get("n_slots") or 1))
+        # user requests share the user slots; the helper slot (core/serving_slots.py) has its own one-at-a-time gate
+        n = serving_slots.user_slot_count(serving_slots.main_n_slots())
         if self._global is None or n != self._global_n:
             # resized on model (re)load; holders of the old one release it harmlessly
             self._global, self._global_n = asyncio.Semaphore(n), n
@@ -131,6 +169,35 @@ class _Admission:
 
 
 admission = _Admission()
+# telemetry reads the queue through core (core never imports routes); the lambda follows a replaced `admission`
+serving_slots.register_queue_stats(lambda: admission.stats())
+
+QUEUE_UPDATE_S = 2.0
+# stream items that mean the model has started answering (reasoning or text or a tool call)
+_FIRST_TOKEN_EVENTS = ("content_delta", "thought_delta", "tool_preparing", "result")
+
+
+async def _acquire_pair(mine: asyncio.Semaphore, glob: asyncio.Semaphore) -> None:
+    await mine.acquire()
+    try:
+        await glob.acquire()
+    except BaseException:
+        mine.release()
+        raise
+
+
+def _abandon_acquire(acq: "asyncio.Future", mine: asyncio.Semaphore, glob: asyncio.Semaphore) -> None:
+    """The waiting request went away (user stopped, connection dropped). Cancel its place in line; if it had already
+    got both semaphores, give them back. Synchronous: it runs where an abandoned stream cannot await."""
+    def _give_back(t):
+        if not t.cancelled() and t.exception() is None:
+            mine.release()
+            glob.release()
+    if acq.done():
+        _give_back(acq)
+    else:
+        acq.cancel()
+        acq.add_done_callback(_give_back)
 
 
 async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=0.4, max_tokens=-1, repeat_penalty=1.15, rid: Optional[int] = None, grammar: Optional[str] = None, extra: Optional[dict] = None, effort: Optional[str] = None, top_p: Optional[float] = None, min_p: Optional[float] = None, presence_penalty: Optional[float] = None, top_k: Optional[int] = None, tool_choice: Optional[str] = None):
@@ -166,35 +233,73 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
             yield item
         return
     glob, mine = admission._sems(get_current_user_id())
+    t_enter = time.time()
     if glob.locked() or mine.locked():
-        yield ("queued", {"position": admission.waiting + 1})
-    admission.waiting += 1
-    try:
-        await mine.acquire()
+        # wait in line, telling the user their place whenever it changes (checked every QUEUE_UPDATE_S)
+        ticket = admission.enter_queue()
+        acq = asyncio.ensure_future(_acquire_pair(mine, glob))
         try:
-            await glob.acquire()
+            shown = None
+            while True:
+                pos = admission.position(ticket)
+                if pos != shown:
+                    yield ("queued", {"position": pos})
+                    shown = pos
+                done, _ = await asyncio.wait({acq}, timeout=QUEUE_UPDATE_S)
+                if done:
+                    acq.result()
+                    break
         except BaseException:
+            _abandon_acquire(acq, mine, glob)
+            raise
+        finally:
+            admission.leave_queue(ticket)
+    else:
+        await _acquire_pair(mine, glob)
+    admission.recent_waits.append((time.time(), time.time() - t_enter))
+    # shared KV pool (-kvu): wait instead of overflowing it, which fails every running request (core/serving_slots.py)
+    pool_need, pool_cap, prompt_est = 0, serving_slots.pool_capacity(state.profile), 0
+    if pool_cap:
+        try:
+            from core.agent_loop import estimate_prompt_tokens
+            prompt_est = estimate_prompt_tokens(msgs, tools)
+            # the estimate corrected by what llama-server really read on earlier answers (TokenCalibration)
+            pool_need = serving_slots.request_need(serving_slots.calibration.scale(prompt_est), max_tokens,
+                                                   state.profile)
+            if not serving_slots.pool.fits(pool_need, pool_cap):
+                yield ("queued", {"position": serving_slots.pool.waiting + 1, "reason": "memory"})
+            await serving_slots.pool.acquire(pool_need, pool_cap)
+        except BaseException:
+            glob.release()
             mine.release()
             raise
-    finally:
-        admission.waiting -= 1
     slot = None
     n_slots = int((state.profile or {}).get("n_slots") or 1)
     uid = get_current_user_id()
     if n_slots > 1 and uid is not None and (APP_CONFIG.get("serving") or {}).get("slot_affinity", True):
         slot = _choose_slot(uid, n_slots)
-        _slot_inflight[slot] = _slot_inflight.get(slot, 0) + 1
+        serving_slots.table.begin(slot)
         _slot_choice.set(slot)
+    first_token = False
     try:
         async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
                                                repeat_penalty, rid, grammar, extra=extra, effort=effort,
                                                top_p=top_p, min_p=min_p, presence_penalty=presence_penalty, top_k=top_k,
                                                tool_choice=tool_choice):
+            if not first_token and isinstance(item, tuple) and item and item[0] in _FIRST_TOKEN_EVENTS:
+                first_token = True      # time to first token as the user sees it: queue + prompt reading
+                admission.recent_ttft.append((time.time(), time.time() - t_enter))
+            if prompt_est and isinstance(item, tuple) and item and item[0] == "result" and isinstance(item[1], dict):
+                t = item[1].get("timings") or {}
+                real = int(t.get("prompt_n") or 0) + int(t.get("cache_n") or 0)
+                serving_slots.calibration.observe(prompt_est, real)
             yield item
     finally:
         if slot is not None:
-            _slot_inflight[slot] = max(0, _slot_inflight.get(slot, 1) - 1)
+            serving_slots.table.end(slot)
             _slot_choice.set(None)
+        if pool_need:
+            serving_slots.pool.release(pool_need)
         glob.release()
         mine.release()
 

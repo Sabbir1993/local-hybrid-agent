@@ -1,0 +1,15 @@
+build: 11429 (d81235049) with Clang 20.1.8 for Windows x86_64
+llama_model_loader: loaded meta data with 40 key-value pairs and 579 tensors from model.gguf (version GGUF V3 (latest))
+load_tensors: offloaded 49/49 layers to GPU
+llama_context: n_ctx         = 10240
+llama_context: n_seq_max     = 15
+llama_kv_cache: size =  640.00 MiB ( 10240 cells,  48 layers, 15/15 seqs), K (q8_0):  320.00 MiB, V (q8_0):  320.00 MiB
+
+main: n_kv_max = 10240, n_batch = 2048, n_ubatch = 512, flash_attn = 1, is_pp_shared = 0, is_tg_separate = 0, n_gpu_layers = 999, n_threads = 8, n_threads_batch = 8
+
+{"n_kv_max": 10240, "n_batch": 2048, "n_ubatch": 512, "flash_attn": 1, "is_pp_shared": 0, "n_gpu_layers": 999, "n_threads": 8, "n_threads_batch": 8, "pp": 512, "tg": 128, "pl": 1, "n_kv": 640, "t_pp": 0.412000, "speed_pp": 1242.718447, "t_tg": 4.100000, "speed_tg": 31.219512, "t": 4.512000, "speed": 141.843972}
+{"n_kv_max": 10240, "n_batch": 2048, "n_ubatch": 512, "flash_attn": 1, "is_pp_shared": 0, "n_gpu_layers": 999, "n_threads": 8, "n_threads_batch": 8, "pp": 512, "tg": 128, "pl": 4, "n_kv": 2560, "t_pp": 1.640000, "speed_pp": 1248.780488, "t_tg": 6.400000, "speed_tg": 80.000000, "t": 8.040000, "speed": 318.407960}
+{"n_kv_max": 10240, "n_batch": 2048, "n_ubatch": 512, "flash_attn": 1, "is_pp_shared": 0, "n_gpu_layers": 999, "n_threads": 8, "n_threads_batch": 8, "pp": 512, "tg": 128, "pl": 8, "n_kv": 5120, "t_pp": 3.300000, "speed_pp": 1241.212121, "t_tg": 8.533333, "speed_tg": 120.000000, "t": 11.833333, "speed": 432.676056}
+{"n_kv_max": 10240, "n_batch": 2048, "n_ubatch": 512, "flash_attn": 1, "is_pp_shared": 0, "n_gpu_layers": 999, "n_threads": 8, "n_threads_batch": 8, "pp": 512, "tg": 128, "pl": 15, "n_kv": 9600, "t_pp": 6.250000, "speed_pp": 1228.800000, "t_tg": 12.800000, "speed_tg": 150.000000, "t": 19.050000, "speed": 503.937008}
+
+llama_perf_context_print:        load time =    5210.32 ms

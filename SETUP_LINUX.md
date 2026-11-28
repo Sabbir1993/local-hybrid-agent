@@ -433,6 +433,99 @@ personal data: never put them in git or a cloud service.
 
 ---
 
+## Serving 15 users: Qwen3.8-27B on 2x Arc Pro B70 (option A)
+
+One llama-server across two 32 GB Arc Pro B70 cards serves 15 people at once. A third 32 GB card holds the helper
+models. Each chat can grow to 128K tokens; the 15 chats share one KV pool sized for realistic use (3-4 chats at 128K
+plus the rest at ~40K).
+
+**Hardware and OS**
+- Both main cards in CPU-attached slots, Resizable BAR on, PSU sized for three cards, 128 GB RAM.
+- Recent kernel with `xe` support for Battlemage, Intel compute-runtime / Level Zero, oneAPI runtime (SYCL), recent Mesa.
+- Swap off or encrypted, core dumps off: the prompt cache keeps users' conversations in RAM.
+- `llama-bench --list-devices` shows three ~32 GB devices. Note the index of the helper card (2 below).
+
+**Measure before going live** (spare port 8099, nothing else on the cards):
+1. SYCL vs Vulkan with `llama-batched-bench` at 1, 4, 8 and 15 parallel users:
+   `python -m core.llama_bench --batched -m <model> -npl 1,4,8,15 -npp 1024 -ntg 128 -ctk q8_0 -ctv q8_0 -fa on -kvu`
+   (add `--bin-dir` / `-dev` for the other backend). Check the log has no "Flash Attention ... assigned to device CPU".
+   Watch total decode tok/s from 8 to 15 users. On the A770 box (2026-11-27, b12810, Qwen3.5-4B Q4_K_M, one card):
+   Vulkan 60 / 148 / 164 / 96 tok/s at 1 / 4 / 8 / 15 users; SYCL 54 / 64 / 65 / 67. SYCL barely scales for
+   generation; Vulkan drops past 8 users. If the B70 shows the same drop, two servers with 8 users each (option B)
+   can beat one server with 15.
+2. MTP draft on/off and draft tokens 2/3/4 at 15 users; ubatch 256/512.
+3. KV cache quality f16 vs q8_0 on 20 fixed Bangla + English prompts, plus a fact placed at ~100K tokens.
+4. Fill the pool to its planned size: each card must keep ≥ 1 GiB free.
+
+**Model Config (Settings → Model Config, Qwen3.8-27B-Q4_K_M)**
+
+| Field | Value | Why |
+|---|---|---|
+| GPU devices / split | cards 0 and 1, `layer`, `1,1` | the helper card stays out |
+| Context size | `1000000` | the shared pool for all slots (q8_0: ~1.0M fits next to the weights) |
+| Parallel slots | `16` | 15 users + 1 helper slot |
+| Unified KV / Per-slot cap | on / `131072` | each chat up to 128K |
+| KV cache / Flash attention | `q8_0` / `on` | quantized KV needs flash attention |
+| MTP draft | on (draft tokens from step 2) | |
+| Cache reuse | `0` | hybrid model: llama.cpp cannot use it (the app leaves it out anyway) |
+| Checkpoints / slot | `0` (automatic = 4) | ~150 MiB each in RAM: 16 x 4 x 150 MiB ≈ 9.6 GB |
+| Prompt RAM (MiB) | `24576` | restores a chat in ~1 s instead of re-reading it |
+| Requests per user / Helper slot | `1` / On | |
+
+The preflight shows weights, KV, recurrent state, MTP and compute per card. Load only when it fits.
+
+**`config/app.json` on that box** (merge into the existing sections)
+
+```json
+{
+  "runtime": "sycl",
+  "runtimes": { "sycl": { "gpu_devices": [0, 1], "small_model_gpu": 2,
+    "env": { "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu", "GGML_SYCL_ENABLE_VMM": "0",
+             "SYCL_CACHE_PERSISTENT": "1", "SYCL_CACHE_DIR": "/var/cache/local-ai/sycl" } } },
+  "serving": { "queue_enabled": true, "slot_affinity": true, "max_inflight_per_user": 1, "helper_slot": 1 },
+  "supervision": { "health_timeout_s": 600 },
+  "small_models": {
+    "executor": { "gpu": 2, "fallback_enabled": false },
+    "vision":   { "gpu": 2, "fallback_enabled": false },
+    "embedder": { "gpu": 2 }
+  }
+}
+```
+
+- `gpu_devices: [0, 1]`, not `"auto"`: auto would put the main model on all three cards.
+- Helper lanes on card 2 with `fallback_enabled: false`, so titles, search rewrites, summaries, the input guard and
+  answer checks never land on the main model. Set the same `gpu: 2` for Whisper and image models.
+- The first SYCL load compiles kernels for several minutes (hence the 600 s limit); later loads use the cache.
+
+**Static files through nginx**: serve the built frontend directly and keep the app for API calls:
+
+```nginx
+location /assets/ {
+    alias [APP_FOLDER]/frontend/dist/assets/;   # what routes/pages.py serves at /assets/
+    expires 30d;
+    add_header Cache-Control "public, immutable";
+}
+```
+
+**Roll out**
+1. Run `scripts/load_test_chat.py` (see `--help`) with 5, 10, then 15 test users. Pass: no errors, no "context full",
+   queue wait under 2 s, at least 15 tok/s each at 15 users.
+2. Pilot for a week. Watch the dashboard's serving section: queue depth, wait and time to first token, pool use,
+   per-slot context fill, VRAM per card, RAM.
+
+**What the app does for 15 users**
+- **Sticky slots** (`core/serving_slots.py`): each user keeps a slot, so their cached conversation survives other
+  users' turns.
+- **Helper slot**: the app's own calls to the main model (image reading, keepalive, any job without a helper lane) use
+  the last slot.
+- **Pool guard**: when the running chats would overflow the shared pool, the newest long one waits with a message
+  ("Waiting for model memory"). Without it, llama-server fails every running request ("Context size has been
+  exceeded").
+- **Shared reads**: the queue position updates while waiting, and telemetry and `/slots` are computed once per tick
+  for all viewers.
+
+---
+
 ## Databases
 
 You don't need to copy any database. On first start the server creates

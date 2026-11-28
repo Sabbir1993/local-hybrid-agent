@@ -240,6 +240,60 @@ class OptionalFlags(unittest.TestCase):
         self.assertNotIn("--load-mode", _cmd(use_mmap=True))
 
 
+QWEN35_INFO = {"arch": "qwen35", "n_layer": 64, "n_kv_layers": 16, "n_head_kv": 4, "head_dim": 256,
+               "n_expert": 0, "complete": True}
+DENSE_INFO = {"arch": "llama", "n_layer": 32, "n_kv_layers": None, "n_head_kv": 8, "head_dim": 128,
+              "n_expert": 0, "complete": True}
+
+
+def _cmd_with(info, **profile):
+    with mock.patch("core.vram.gguf_parser.parse_gguf_info", lambda p: info):
+        return _cmd(**profile)
+
+
+class HybridModels(unittest.TestCase):
+    """qwen35-type hybrids (recurrent + attention layers): bounded checkpoints, no cache reuse."""
+
+    def test_detection(self):
+        self.assertTrue(process.is_hybrid(QWEN35_INFO))
+        self.assertFalse(process.is_hybrid(DENSE_INFO))
+        self.assertFalse(process.is_hybrid(None))
+
+    def test_hybrid_gets_bounded_checkpoints_automatically(self):
+        cmd = _cmd_with(QWEN35_INFO)
+        self.assertEqual(_flag(cmd, "-ctxcp"), str(process.HYBRID_CTX_CHECKPOINTS))
+
+    def test_explicit_checkpoints_win(self):
+        self.assertEqual(_flag(_cmd_with(QWEN35_INFO, ctx_checkpoints=2), "-ctxcp"), "2")
+        self.assertEqual(_flag(_cmd_with(DENSE_INFO, ctx_checkpoints=6), "-ctxcp"), "6")
+
+    def test_dense_model_keeps_llama_default(self):
+        self.assertNotIn("-ctxcp", _cmd_with(DENSE_INFO))
+
+    def test_cache_reuse_left_out_for_hybrid_only(self):
+        self.assertNotIn("--cache-reuse", _cmd_with(QWEN35_INFO, cache_reuse=256))
+        self.assertEqual(_flag(_cmd_with(DENSE_INFO, cache_reuse=256), "--cache-reuse"), "256")
+
+
+class FifteenUserLimits(unittest.TestCase):
+    def test_pool_for_15_users_at_128k_is_accepted(self):
+        from core.config import CONFIG_INT_FIELDS
+        self.assertGreaterEqual(CONFIG_INT_FIELDS["context_size"][1], 15 * 131072)
+        self.assertGreaterEqual(CONFIG_INT_FIELDS["kv_unified_per_slot"][1], 131072)
+        self.assertIn("ctx_checkpoints", CONFIG_INT_FIELDS)
+
+    def test_ctx_checkpoints_is_saved_per_model(self):
+        from core.config import MODEL_CONFIG_KEYS, CONFIG_TARGETS
+        self.assertIn("ctx_checkpoints", MODEL_CONFIG_KEYS)
+        self.assertIn("ctx_checkpoints", CONFIG_TARGETS)
+
+    def test_big_pool_with_per_slot_cap(self):
+        cmd = _cmd_with(QWEN35_INFO, context_size=1_000_000, n_slots=15, kv_unified=True, kv_unified_per_slot=131072)
+        self.assertEqual(_flag(cmd, "-c"), "1000000")
+        self.assertEqual(_flag(cmd, "-np"), "15")
+        self.assertEqual(_flag(cmd, "--kv-unified-per-slot"), "131072")
+
+
 class TunedOverridesProfile(unittest.TestCase):
     def test_tuned_wins_for_split_and_layers(self):
         cmd = _cmd(tensor_split="5,15", n_gpu_layers=10,
