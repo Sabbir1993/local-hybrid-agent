@@ -79,19 +79,62 @@ def _slots_fill(slots: list) -> list:
     return out
 
 
-def _serving_snapshot(slots_fill: list) -> dict:
-    """Queue, shared-pool and slot state for capacity monitoring (15 users on one model)."""
+def _multi_active() -> bool:
+    """Multi mode with at least one healthy main-model server (the snapshot then reads every instance's /slots)."""
+    from . import main_router
+    return main_router.is_multi() and any(i["healthy"] for i in main_router.live_instances())
+
+
+def _multi_slots_fill(per_instance: Dict[int, Optional[list]]) -> list:
+    """All instances' slot rows in one list, each tagged with the instance it runs on."""
+    rows = []
+    for idx in sorted(per_instance):
+        for row in _slots_fill(per_instance[idx] or []):
+            rows.append({**row, "instance": idx})
+    return rows
+
+
+def _serving_snapshot(slots_fill: list, per_instance: Optional[Dict[int, Optional[list]]] = None) -> dict:
+    """Queue, shared-pool and slot state for capacity monitoring (15 users on one model).
+    Multi mode (per_instance = {index: /slots list or None}): adds "instances", one row per llama-server."""
     from . import serving_slots
     out = {"slots_fill": slots_fill, "slot_table": serving_slots.table.snapshot(),
            "pool": {"used_tokens": serving_slots.pool.used, "running": serving_slots.pool.running,
                     "waiting": serving_slots.pool.waiting,
                     "capacity_tokens": serving_slots.pool_capacity(state.profile) or None},
            "helper_slot": serving_slots.helper_slot_index(serving_slots.main_n_slots())}
+    if per_instance is not None:
+        out["instances"] = _instances_section(per_instance)
     try:
         out.update(serving_slots.queue_stats())
     except Exception:
         pass
     return out
+
+
+def _instances_section(per_instance: Dict[int, Optional[list]]) -> list:
+    """One row per main-model server (multi mode): health, slot ownership, pool and in-flight use, and its slots."""
+    from . import main_router, serving_slots
+    rows = []
+    for inst in state.instances_status():
+        idx = int(inst.get("index") or 0)
+        n_slots = int(inst.get("n_slots") or 1)
+        table = serving_slots.table_for(idx).snapshot()
+        slots = per_instance.get(idx)
+        rows.append({
+            "index": idx,
+            "port": inst.get("port"),
+            "gpus": list(inst.get("gpus") or []),
+            "n_slots": n_slots,
+            "healthy": bool(inst.get("healthy")),
+            "busy": table["busy"],
+            "owned": table["owned"],
+            "pool_used": serving_slots.pool_for(idx).used,
+            "pool_capacity": serving_slots.instance_capacity(state.profile, n_slots) or None,
+            "inflight": int(main_router.inflight.get(idx, 0)),
+            "slots_fill": _slots_fill(slots) if isinstance(slots, list) else [],
+        })
+    return rows
 
 
 # One snapshot per tick, shared by every viewer: each dashboard (websocket every 0.75 s, /control/telemetry polls) used
@@ -215,14 +258,24 @@ async def _compute_telemetry_snapshot() -> Dict[str, Any]:
     global _slots_fail_count
     ctx_info = {"n_ctx": None, "n_past": None, "n_prompt": None, "pct": None}
     slots_fill = []          # every slot, not only slot 0 (15 users = 15 slots)
-    if is_server_up:
+    per_instance = None      # multi mode: {index: /slots list or None} for every server
+    multi = _multi_active()
+    if is_server_up or multi:
         try:
             from . import serving_slots
-            slots = await serving_slots.main_slots(timeout=1.2)   # shared with the status bar, at most 1 s old
-            if slots is None:
-                raise RuntimeError("no /slots answer")
+            if multi:
+                per_instance = await serving_slots.all_main_slots(timeout=1.2)
+                slots_fill = _multi_slots_fill(per_instance)
+                slots = per_instance.get(0)               # the primary keeps the single-server context figures
+                if slots is None and not slots_fill:
+                    raise RuntimeError("no /slots answer")
+            else:
+                slots = await serving_slots.main_slots(timeout=1.2)   # shared with the status bar, at most 1 s old
+                if slots is None:
+                    raise RuntimeError("no /slots answer")
             if slots:
-                slots_fill = _slots_fill(slots)
+                if not multi:
+                    slots_fill = _slots_fill(slots)
                 s0 = slots[0]
                 n_ctx = s0.get("n_ctx") or None
                 n_prompt = s0.get("n_prompt_tokens") or 0
@@ -368,7 +421,7 @@ async def _compute_telemetry_snapshot() -> Dict[str, Any]:
             },
         },
         "context": ctx_info,
-        "serving": _serving_snapshot(slots_fill),
+        "serving": _serving_snapshot(slots_fill, per_instance),
         "hardware": {
             "system_ram_used_gb": ram_used_gb,
             "system_ram_total_gb": ram_total_gb,

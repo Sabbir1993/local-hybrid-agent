@@ -192,7 +192,9 @@ WEB_AFTER_KB_BLOCK = (" The user has web search turned on, so you may search the
 async def chat_run(req: ChatRunRequest, user: Principal = Depends(get_current_user), request: Request = None):
     from core.agent_tools import set_current_user
     from core import voice_policy
+    from core.request_context import set_current_session
     set_current_user(user.id)
+    set_current_session(getattr(req, "session_id", None))     # one chat stays on one main-model instance (multi mode)
     set_project_scope(getattr(req, "session_id", None))                 # a website project belongs to this chat only
     voice_policy.apply(req)     # a spoken turn: no hidden reasoning, short answer, no answer-check rewrite
     # a custom agent works on the user's own files: local models only (same rule as routes/agent/setup.py)

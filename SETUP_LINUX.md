@@ -524,6 +524,53 @@ location /assets/ {
 - **Shared reads**: the queue position updates while waiting, and telemetry and `/slots` are computed once per tick
   for all viewers.
 
+### Several servers: one llama-server per GPU group (option B)
+
+**Settings → Model Config → Server mode → Several servers** runs a full copy of the main model on each GPU group,
+and the app sends each chat to the least busy copy. Each server gets at least one GPU, no GPU is shared, and each has
+its own parallel slot count. Server 1 uses port 8090, and servers 2-8 use 8191-8197 (127.0.0.1 only; helper lanes
+cannot take 8190-8199). The list is saved per runtime, because Vulkan and SYCL number the GPUs differently. One server
+stays the default.
+
+**When to use it:** many people generate at the same time and the model fits on one card. With `-sm layer`, one
+server across two cards uses only one card at a time while generating; two servers generate on both at once.
+
+Measured on the A770 box (2026-11-28, Vulkan, Qwen3.5-9B Q4_K_M, 1,024-token prompts, `llama-batched-bench`),
+total generation tok/s:
+
+| Users | One server, 2 cards | Two servers, 1 card each |
+|---|---|---|
+| 4 | 95 | 153 |
+| 8 | 111 | 261 |
+| 16 | 80 | 310 |
+
+Prompt reading gains less (about 1.15-1.5x). One user is not faster.
+
+**Trade-offs:** each server holds its own copy of the weights, so each chat has less KV room than in one shared pool.
+Context size is per server. A chat moved to another server reads its prompt once more.
+
+**Example for the B70 box** (helper card = GPU 2): server 1 on GPU 0 with 8 slots, server 2 on GPU 1 with 7 slots.
+
+**What the app does**
+- **Routing** (`core/main_router.py`): a chat stays on its server and slot, keeping its prompt cache. When its server
+  is full it moves to the one with free slots. When all are full it queues, and the first freed slot takes it.
+  Background jobs go to the least busy server.
+- **Lifecycle** (`core/main_server.py`, `core/state.py`): every server's VRAM is checked before any starts. Servers
+  start one at a time; on SYCL the second reuses the kernel cache the first compiled. If server 1 crashes, only it
+  restarts and the others keep answering. If another server crashes, only that one restarts, with its own crash-loop
+  limit.
+- **Status**: Settings shows each server's state, and the dashboard shows slots per server. `/control/log?instance=N`
+  shows one server's log, where N is 0-based.
+
+**Check on the Linux box before going live**
+1. Run `llama-batched-bench` on one card at 8 users, then run two at the same time, one per card. Two servers are
+   worth it only if the total is clearly higher.
+2. Pick Several servers, apply, and load. The log shows `launching main server #2 on port 8191` and both servers become
+   healthy. `ss -ltnp | grep -E '8090|8191'` lists both.
+3. Run `scripts/load_test_chat.py` at 15 users and confirm both servers get work in the dashboard.
+4. Kill server 2 (`kill <pid>` from Settings → status). Chats keep answering on server 1, and server 2 comes back
+   within a few seconds.
+
 ---
 
 ## Databases

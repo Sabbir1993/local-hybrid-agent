@@ -302,5 +302,114 @@ class TunedOverridesProfile(unittest.TestCase):
         self.assertEqual(_flag(cmd, "-ngl"), "99")
 
 
+def _run(profile, instance=None):
+    """build_launch_command on this exact profile dict (not a copy), patched like _cmd()."""
+    with mock.patch("core.process.find_llama_server", lambda d: Path("C:/llama/llama-server.exe")), \
+            mock.patch("core.process.apply_runtime", lambda p: None):
+        return process.build_launch_command(profile, instance=instance)
+
+
+def _inst(index=1, port=8191, gpus=(2,), n_slots=4, tensor_split=None):
+    return {"index": index, "port": port, "gpus": list(gpus), "n_slots": n_slots,
+            "tensor_split": tensor_split, "single": len(gpus) == 1}
+
+
+class MultiInstance(unittest.TestCase):
+    """build_launch_command(profile, instance=...): one of several llama-servers of the same model."""
+
+    def test_one_gpu_instance(self):
+        profile = {"model_path": "C:/m.gguf", "llama_bin_dir": "C:/llama", "gpu_devices": [0, 1],
+                   "tensor_split": "9,11", "n_slots": 2}
+        before = {k: (list(v) if isinstance(v, list) else v) for k, v in profile.items()}
+        inst = _inst(port=8191, gpus=[2], n_slots=4)
+        cmd = _run(profile, inst)
+        self.assertEqual(_flag(cmd, "--port"), "8191")
+        self.assertEqual(_flag(cmd, "-dev"), "Vulkan2")
+        self.assertEqual(_flag(cmd, "-np"), "4")
+        self.assertNotIn("-sm", cmd)
+        self.assertNotIn("--tensor-split", cmd)
+        # the shared profile is untouched for the instance's own values
+        self.assertEqual(profile["gpu_devices"], before["gpu_devices"])
+        self.assertEqual(profile["n_slots"], 2)
+        self.assertEqual(profile["tensor_split"], "9,11")
+        for key in ("_launch_gpu_devices", "_launch_device_ids"):
+            self.assertNotIn(key, profile)
+        # the launch record goes onto the instance instead
+        self.assertEqual(inst["_launch_gpu_devices"], [2])
+        self.assertEqual(inst["_launch_device_ids"], ["Vulkan2"])
+
+    def test_two_gpu_instance_equal_split(self):
+        cmd = _run({"model_path": "C:/m.gguf", "llama_bin_dir": "C:/llama"},
+                   _inst(gpus=[0, 1], tensor_split=None))
+        self.assertEqual(_flag(cmd, "-dev"), "Vulkan0,Vulkan1")
+        self.assertEqual(_flag(cmd, "-sm"), CONFIG_DEFAULTS["split_mode"])
+        self.assertEqual(_flag(cmd, "--tensor-split"), "1,1")
+
+    def test_two_gpu_instance_explicit_split(self):
+        cmd = _run({"model_path": "C:/m.gguf", "llama_bin_dir": "C:/llama"},
+                   _inst(gpus=[0, 1], tensor_split="3,1"))
+        self.assertEqual(_flag(cmd, "--tensor-split"), "3,1")
+
+    def test_instance_n_slots_drives_unified_per_slot_cap(self):
+        base = {"model_path": "C:/m.gguf", "llama_bin_dir": "C:/llama", "kv_unified": True,
+                "context_size": 131072, "kv_unified_per_slot": 8192}
+        # profile says 4 slots; instance says 1 -> no cap (a single slot would just shrink its window)
+        one = _run({**base, "n_slots": 4}, _inst(gpus=[2], n_slots=1))
+        self.assertEqual(_flag(one, "-np"), "1")
+        self.assertIn("-kvu", one)
+        self.assertNotIn("--kv-unified-per-slot", one)
+        # profile says 1 slot; instance says 4 -> cap emitted from the instance's count
+        four = _run({**base, "n_slots": 1}, _inst(gpus=[2], n_slots=4))
+        self.assertEqual(_flag(four, "-np"), "4")
+        self.assertEqual(_flag(four, "--kv-unified-per-slot"), "8192")
+
+    def test_profile_tuned_tensor_split_is_ignored(self):
+        profile = {"model_path": "C:/m.gguf", "llama_bin_dir": "C:/llama", "gpu_devices": [0, 1],
+                   "tensor_split": "5,15", "tuned": {"tensor_split": "9,11"}}
+        cmd = _run(profile, _inst(gpus=[0, 1], tensor_split=None))
+        self.assertEqual(_flag(cmd, "--tensor-split"), "1,1")
+        self.assertEqual(profile["tuned"]["tensor_split"], "9,11")
+        # an explicit instance split still wins over the tuned one
+        cmd = _run(profile, _inst(gpus=[0, 1], tensor_split="3,1"))
+        self.assertEqual(_flag(cmd, "--tensor-split"), "3,1")
+
+    def test_shared_settings_still_come_from_profile(self):
+        cmd = _run({"model_path": "C:/m.gguf", "llama_bin_dir": "C:/llama", "context_size": 65536,
+                    "kv_cache_type": "q8_0", "threads": 8}, _inst(gpus=[2], n_slots=2))
+        self.assertEqual(_flag(cmd, "-c"), "65536")
+        self.assertEqual(_flag(cmd, "-ctk"), "q8_0")
+        self.assertEqual(_flag(cmd, "-t"), "8")
+
+    def test_environment_uses_instance_devices(self):
+        profile = {"backend": "vulkan", "gpu_devices": [0, 1], "_launch_gpu_devices": [0, 1]}
+        with mock.patch("core.process.build_child_env", return_value={"PATH": "x"}) as child:
+            process.build_launch_environment(profile, base_env={"PATH": "x"}, instance=_inst(gpus=[2]))
+        self.assertEqual(child.call_args.kwargs["device_indices"], [2])
+        # once the instance has its launch record, that record wins
+        inst = _inst(gpus=[2])
+        inst["_launch_gpu_devices"] = [1]
+        with mock.patch("core.process.build_child_env", return_value={}) as child:
+            process.build_launch_environment(profile, base_env={}, instance=inst)
+        self.assertEqual(child.call_args.kwargs["device_indices"], [1])
+
+    def test_instance_uses_its_own_auto_offload(self):
+        """Each server's VRAM check picks its own --n-cpu-moe; a value left on the shared profile is not used."""
+        base = {"model_path": "C:/m.gguf", "llama_bin_dir": "C:/llama", "model_type": "moe", "gpu_devices": [0, 1], "_auto_n_cpu_moe": 7}
+        inst = _inst(gpus=[2])
+        inst["_auto_n_cpu_moe"] = 3
+        self.assertEqual(_flag(_run(dict(base), inst), "-ncmoe"), "3")
+        self.assertNotIn("-ncmoe", _run(dict(base), _inst(gpus=[2])))
+
+    def test_no_instance_is_the_old_call(self):
+        profile = {"model_path": "C:/m.gguf", "llama_bin_dir": "C:/llama", "gpu_devices": [0, 1],
+                   "tensor_split": "9,11", "n_slots": 2, "kv_unified": True, "kv_unified_per_slot": 8192,
+                   "context_size": 32768}
+        explicit_none = _run(dict(profile), None)
+        implicit = _run(profile)
+        self.assertEqual(explicit_none, implicit)
+        # the single-server path still records its devices on the profile itself
+        self.assertEqual(profile["_launch_gpu_devices"], [0, 1])
+
+
 if __name__ == "__main__":
     unittest.main()

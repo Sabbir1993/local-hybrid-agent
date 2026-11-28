@@ -17,7 +17,10 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
+from . import main_router
+
 MIN_SLOTS_FOR_HELPER = 4
+CHAT_INSTANCE_MAX = 5000      # sticky chat -> instance entries kept (oldest dropped)
 
 
 def _serving_cfg() -> dict:
@@ -40,9 +43,26 @@ def user_slot_count(n_slots: int) -> int:
 
 
 def main_n_slots() -> int:
+    """Slots of the main model: one server's, or the total over the healthy instances in multi mode."""
+    if main_router.is_multi():
+        return max(1, sum(i["n_slots"] for i in main_router.live_instances() if i["healthy"]))
     from .state import state
     return max(1, int((getattr(state, "launch_info", None) or {}).get("n_slots")
                       or (state.profile or {}).get("n_slots") or 1))
+
+
+def total_user_slots() -> int:
+    """Slots users may take across the main model (the admission gate's size)."""
+    if main_router.is_multi():
+        return max(1, sum(user_slot_count(i["n_slots"]) for i in main_router.live_instances() if i["healthy"]))
+    return user_slot_count(main_n_slots())
+
+
+def instance_n_slots(index: int) -> int:
+    for i in main_router.live_instances():
+        if i["index"] == index:
+            return i["n_slots"]
+    return main_n_slots()
 
 
 class SlotTable:
@@ -107,6 +127,14 @@ class SlotTable:
 
 
 table = SlotTable()
+# multi mode: one table per llama-server instance. table_for(0) is `table` itself, so a replaced `table` still holds.
+tables: dict = {0: table}
+
+
+def table_for(index: int) -> SlotTable:
+    if index == 0:
+        return table
+    return tables.setdefault(index, SlotTable())
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -219,47 +247,167 @@ class PoolLedger:
 
 
 pool = PoolLedger()
+pools: dict = {0: pool}     # multi mode: one pool per instance (each has its own KV cache)
+
+
+def pool_for(index: int) -> PoolLedger:
+    if index == 0:
+        return pool
+    return pools.setdefault(index, PoolLedger())
+
+
+def instance_capacity(profile: Optional[dict], n_slots: int) -> int:
+    """pool_capacity for one instance: its own slot count (the context size is per instance)."""
+    p = dict(profile or {})
+    p["n_slots"] = n_slots
+    return pool_capacity(p)
+
+
+# multi mode: the instance each chat (uid, session) runs on. Its prompt cache lives there, so it stays put.
+chat_instance: dict = {}
+
+
+def _remember_chat(key, index: int) -> None:
+    chat_instance.pop(key, None)
+    chat_instance[key] = index
+    while len(chat_instance) > CHAT_INSTANCE_MAX:
+        chat_instance.pop(next(iter(chat_instance)))
+
+
+def _busy_slots(index: int) -> int:
+    return sum(1 for c in table_for(index).inflight.values() if c)
+
+
+def place(uid, session, need: int, profile: Optional[dict]) -> int:
+    """Multi mode: the instance for a new request. The chat's own instance while it has a free user slot and room in
+    its pool; else the healthy instance with the most free user slots, then the most free pool tokens, then the fewest
+    requests in flight, then the lowest index."""
+    key = (uid, session)
+    insts = [i for i in main_router.live_instances() if i["healthy"]]
+    if not insts:
+        return 0
+    by_index = {i["index"]: i for i in insts}
+
+    def free_slots(idx: int) -> int:
+        return max(0, user_slot_count(by_index[idx]["n_slots"]) - _busy_slots(idx))
+
+    def fits(idx: int) -> bool:
+        cap = instance_capacity(profile, by_index[idx]["n_slots"])
+        return cap == 0 or pool_for(idx).fits(need, cap)
+
+    sticky = chat_instance.get(key)
+    if sticky in by_index and free_slots(sticky) > 0 and fits(sticky):
+        chosen = sticky
+    else:
+        ranked = sorted(by_index, key=lambda idx: (
+            -free_slots(idx),
+            -(instance_capacity(profile, by_index[idx]["n_slots"]) - pool_for(idx).used),
+            main_router.inflight.get(idx, 0), idx))
+        if free_slots(ranked[0]) > 0:
+            chosen = ranked[0]
+        elif sticky in by_index:            # nothing free (the gate normally prevents this): stay with the cache
+            chosen = sticky
+        else:
+            chosen = min(by_index, key=lambda idx: (main_router.inflight.get(idx, 0), idx))
+    _remember_chat(key, chosen)
+    return chosen
 
 
 # ---------------------------------------------------------------------------------------------------------------
 # llama-server /slots, shared: the status bar (every viewer, every 2.5 s) and telemetry each called it per viewer
 # ---------------------------------------------------------------------------------------------------------------
 SLOTS_TTL_S = 1.0
-_slots_cache: tuple = (0.0, None)
+_slots_cache: tuple = (0.0, None)           # the primary (instance 0); kept as it was (tests patch it)
 _slots_task: Optional["asyncio.Future"] = None
+_extra_slots_cache: dict = {}               # the other instances: index -> (time, data)
+_extra_slots_tasks: dict = {}
 
 
-async def main_slots(timeout: float = 1.5) -> Optional[list]:
-    """The main llama-server's /slots list (at most SLOTS_TTL_S old), or None when it is down or not answering."""
-    global _slots_cache, _slots_task
+def _client_for(index: int):
+    """The httpx client of a live instance, or None when it is down."""
     from .state import state
-    at, data = _slots_cache
+    if index == 0:
+        ok = state.process and state.process.poll() is None and state.client is not None
+        return state.client if ok else None
+    for e in getattr(state, "extras", None) or []:
+        if int(e.index) == index:
+            return e.client if e.is_running() and e.client is not None else None
+    return None
+
+
+async def main_slots(timeout: float = 1.5, index: Optional[int] = None) -> Optional[list]:
+    """An instance's /slots list (at most SLOTS_TTL_S old), or None when it is down or not answering.
+    index None = the primary, as before instances existed."""
+    global _slots_cache, _slots_task
+    idx = 0 if index is None else int(index)
+    client = _client_for(idx)
+    if client is None:
+        return None
+    at, data = _slots_cache if idx == 0 else _extra_slots_cache.get(idx, (0.0, None))
     if data is not None and time.time() - at < SLOTS_TTL_S:
         return data
-    if not (state.process and state.process.poll() is None and state.client is not None):
-        return None
 
     async def fetch():
-        resp = await state.client.get("/slots", timeout=timeout)
+        resp = await client.get("/slots", timeout=timeout)
         return resp.json() if resp.status_code == 200 else None
 
     loop = asyncio.get_running_loop()
-    if _slots_task is None or _slots_task.done() or _slots_task.get_loop() is not loop:
-        _slots_task = asyncio.ensure_future(fetch())
+    if idx == 0:
+        if _slots_task is None or _slots_task.done() or _slots_task.get_loop() is not loop:
+            _slots_task = asyncio.ensure_future(fetch())
+        task = _slots_task
+    else:
+        task = _extra_slots_tasks.get(idx)
+        if task is None or task.done() or task.get_loop() is not loop:
+            task = _extra_slots_tasks[idx] = asyncio.ensure_future(fetch())
     try:
-        data = await asyncio.shield(_slots_task)
+        data = await asyncio.shield(task)
     except Exception:
         return None
     if isinstance(data, list):
-        _slots_cache = (time.time(), data)
+        if idx == 0:
+            _slots_cache = (time.time(), data)
+        else:
+            _extra_slots_cache[idx] = (time.time(), data)
         return data
     return None
+
+
+async def all_main_slots(timeout: float = 1.2) -> dict:
+    """Every instance's /slots list, for telemetry: {index: list or None}."""
+    idxs = [i["index"] for i in main_router.live_instances()]
+    res = await asyncio.gather(*(main_slots(timeout, index=i) for i in idxs), return_exceptions=True)
+    return {i: (None if isinstance(r, BaseException) else r) for i, r in zip(idxs, res)}
 
 
 def user_slot(uid, n_slots: int) -> int:
     """The slot a user's conversation is cached in (sticky table), for showing their context fill."""
     s = table.slot_of.get(uid)
     return int(s) if s is not None else int(uid or 0) % max(1, user_slot_count(n_slots))
+
+
+def user_instance_slot(uid, session=None) -> Optional[tuple]:
+    """(instance index, slot) of a chat's conversation in multi mode, or None when it has no slot yet."""
+    inst = chat_instance.get((uid, session))
+    if inst is None:
+        return None
+    s = table_for(inst).slot_of.get((uid, session))
+    return (inst, int(s)) if s is not None else None
+
+
+def latest_user_instance(uid) -> Optional[tuple]:
+    """(instance index, slot) of the user's most recently used chat that holds a slot, or None. Used when the caller
+    has no default-session entry (the status bar asks without a chat)."""
+    for key in reversed(list(chat_instance.keys())):
+        if not isinstance(key, tuple) or not key or key[0] != uid:
+            continue
+        inst = chat_instance.get(key)
+        if inst is None:
+            continue
+        s = table_for(inst).slot_of.get(key)
+        if s is not None:
+            return (inst, int(s))
+    return None
 
 
 def queue_stats() -> dict:
@@ -278,11 +426,29 @@ def register_queue_stats(fn) -> None:
 _helper_sem: Optional[asyncio.Semaphore] = None
 
 
+_helper_sems: dict = {}     # multi mode: one helper gate per instance
+
+
 @asynccontextmanager
 async def helper_call():
     """Wrap an app-internal request to the local main model. Yields extra payload fields: the helper slot (waiting
-    for it when another helper call holds it), or {} when no helper slot is reserved (behaviour as before)."""
+    for it when another helper call holds it), or {} when no helper slot is reserved (behaviour as before).
+    Multi mode: the least busy instance and its helper slot; the routing transport sends the call there."""
     global _helper_sem
+    if main_router.is_multi():
+        idx = main_router.least_busy_index()
+        h = helper_slot_index(instance_n_slots(idx)) if idx is not None else None
+        if h is None:
+            yield {}
+            return
+        sem = _helper_sems.setdefault(idx, asyncio.Semaphore(1))
+        tok = main_router._instance_choice.set(idx)
+        try:
+            async with sem:
+                yield {"id_slot": h, "cache_prompt": True}
+        finally:
+            main_router._instance_choice.reset(tok)
+        return
     h = helper_slot_index(main_n_slots())
     if h is None:
         yield {}

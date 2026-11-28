@@ -130,14 +130,38 @@ def set_window(lane: str, tokens: int) -> None:
         st["probed_at"] = time.time()
 
 
+def _is_local_main_lane(lane: str) -> bool:
+    return lane in ("main", "main:lane3d")
+
+
+async def _multi_min_window() -> Optional[int]:
+    """Multi mode: the smallest n_ctx over the healthy instances' slots. A chat can be moved to any instance by the
+    router, so the window it may use is the one every instance can hold. None when no healthy instance answers."""
+    from . import main_router, serving_slots
+    healthy = {i["index"] for i in main_router.live_instances() if i["healthy"]}
+    per = await serving_slots.all_main_slots(timeout=1.5)
+    sizes = []
+    for idx, slots in per.items():
+        if idx not in healthy or not isinstance(slots, list):
+            continue
+        for s in slots:
+            n_ctx = (s or {}).get("n_ctx") if isinstance(s, dict) else None
+            if n_ctx and int(n_ctx) > 0:
+                sizes.append(int(n_ctx))
+    return min(sizes) if sizes else None
+
+
 async def probe_window(lane: str, client) -> Optional[int]:
     """Ask the running llama-server for the real per-request window.
 
     `/slots` advertises `n_ctx` per slot, which is the number it quotes when it
     rejects an oversized prompt - authoritative, unlike profile math. Cached for
     PROBE_TTL_S and backed off for PROBE_RETRY_S after a failure, so a step never
-    pays for this twice. Never raises: a probe failure just keeps the fallback."""
-    if client is None:
+    pays for this twice. Never raises: a probe failure just keeps the fallback.
+    Multi mode (local main lanes): the smallest window over all healthy instances."""
+    from . import main_router
+    multi = _is_local_main_lane(lane) and main_router.is_multi()
+    if client is None and not multi:
         return None
     st = _state(lane)
     now = time.time()
@@ -145,6 +169,16 @@ async def probe_window(lane: str, client) -> Optional[int]:
         return int(st["window"])
     if st["probe_failed_at"] and now - st["probe_failed_at"] < PROBE_RETRY_S:
         return int(st["window"]) if st["window"] else None
+    if multi:
+        try:
+            n_ctx = await _multi_min_window()
+            if not n_ctx:
+                raise RuntimeError("no healthy instance reports n_ctx")
+            set_window(lane, n_ctx)
+            return int(n_ctx)
+        except Exception:
+            st["probe_failed_at"] = now
+            return int(st["window"]) if st["window"] else None
     try:
         r = await client.get("/slots", timeout=1.5)
         if getattr(r, "status_code", 0) != 200:

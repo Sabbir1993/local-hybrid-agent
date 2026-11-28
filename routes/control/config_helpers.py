@@ -1,3 +1,4 @@
+import json
 import re
 import shlex
 from pathlib import Path
@@ -11,6 +12,14 @@ from core.config import (
     CONFIG_TARGETS,
     MAX_GPUS,
     MODEL_CONFIG_KEYS,
+    default_small_gpu,
+)
+from core.main_instances import (
+    instance_port,
+    main_mode,
+    saved_instances,
+    small_gpu_warnings,
+    validate_instances,
 )
 from core import supervision
 from core.supervision import SUPERVISION_LIMITS
@@ -78,6 +87,34 @@ def _apply_config_update(profile: dict, key: str, value) -> Optional[str]:
         if isinstance(value, str):
             value = value.strip().lower() in ("true", "1", "on", "yes")
         profile[key] = bool(value)
+        return None
+    if key == "main_mode":
+        value = str(value or "").strip()
+        if value not in CONFIG_CHOICE_FIELDS["main_mode"]:
+            return f"main_mode must be one of {CONFIG_CHOICE_FIELDS['main_mode']}"
+        # vLLM runs one server per model; multiple llama-server instances only exist for llama.cpp
+        if value == "multi" and profile.get("engine") == "vllm":
+            return "Multiple servers work with the llama.cpp engine only"
+        profile.setdefault("tuned", {})["main_mode"] = value
+        return None
+    if key == "main_instances":
+        raw = value
+        if isinstance(value, str):
+            try:
+                raw = json.loads(value) if value.strip() else []
+            except ValueError:
+                return "main_instances must be a list of servers"
+        if raw == []:
+            # an empty list is "no extra servers": the main model goes back to single mode
+            profile.setdefault("tuned", {})["main_instances"] = []
+            return None
+        try:
+            clean, _warnings = validate_instances(raw, ACTIVE_RUNTIME["gpu_devices"],
+                                                  engine=profile.get("engine") or "llama",
+                                                  small_gpu=default_small_gpu())
+        except ValueError as e:
+            return str(e)
+        profile.setdefault("tuned", {})["main_instances"] = clean
         return None
     if key == "engine":
         allowed = vllm_engine.engines_for(profile.get("model_path") or "")
@@ -280,6 +317,12 @@ def _config_for_profile(p: dict) -> dict:
         "max_inflight_per_user": _serving_value("max_inflight_per_user"),
         "helper_slot": _serving_value("helper_slot"),
         "vllm_max_num_seqs_default": vllm_engine.settings().get("max_num_seqs", 8),
+        # several llama-server instances for the main model (core/main_instances.py)
+        "main_mode": main_mode(p),
+        "main_instances": saved_instances(p),
+        "main_instance_ports": [instance_port(i) for i in range(len(saved_instances(p)))],
+        "main_instance_warnings": small_gpu_warnings(saved_instances(p), default_small_gpu()),
+        "main_multi_allowed": p.get("engine") != "vllm",
         **_reasoning_caps(reasoning.local_mode(p.get("model_path"))),
     }
 

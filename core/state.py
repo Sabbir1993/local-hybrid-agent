@@ -32,6 +32,9 @@ from .supervision import (
 )
 from .process import (build_launch_command, build_launch_environment, describe_launch_env, exit_signal_note,
                       kill_process_tree, forget_engine_pid, remember_engine_pid)
+from .config import apply_runtime
+from .main_instances import instance_specs, main_mode
+from .main_server import MainInstance
 from .engines import engine_of
 from .engines import vllm as vllm_engine
 from .engines.vllm_adapter import EngineTransport
@@ -39,6 +42,7 @@ from .profiles import build_dynamic_profile
 from .events import log_event
 from .sycl_gate import launch_gate
 from . import vram
+from . import main_router
 
 # ---------------- llama-server log file ----------------
 # One file per day, bounded by LOG_KEEP_DAYS, opened lazily. Never raises: a log that cannot
@@ -132,6 +136,10 @@ class ProxyState:
         # what the running process was started with ({"engine", "context_size", "model_path"}; {} = nothing running).
         # Kept apart from `profile`: saving a model's settings edits the profile, not the server that is already up.
         self.launch_info: dict = {}
+        # multi mode only: instances 1..N-1 (MainInstance), and instance 0's spec for watchdog restarts.
+        # Single mode leaves both empty, so nothing below runs for it.
+        self.extras: list = []
+        self._primary_spec: Optional[dict] = None
         # why the last load failed, for /control/status. Without it an operator sees only
         # "didn't become healthy" with nothing in the status endpoint to act on.
         self.last_load_error: Optional[str] = None
@@ -148,7 +156,8 @@ class ProxyState:
         self.client = httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{LLAMA_SERVER_PORT}",
             # passes everything through on llama.cpp; makes a vLLM server answer the same way (core/engines/vllm_adapter.py)
-            transport=EngineTransport(lambda: self.launch_info),
+            # multi mode: the router sends each request to one of the main model's servers (core/main_router.py)
+            transport=main_router.wrap_transport(EngineTransport(lambda: self.launch_info)),
             # was timeout=None: a wedged generation could never be ended, because the agent's
             # wall-clock budget is only checked between steps
             timeout=httpx.Timeout(LOCAL_HTTP_CONNECT_TIMEOUT_S,
@@ -168,6 +177,9 @@ class ProxyState:
     def engine_label(self) -> str:
         return "vLLM" if self.engine == "vllm" else "llama-server"
 
+    def _extras_serving(self) -> bool:
+        return any(getattr(e, "healthy", False) and e.is_running() for e in (getattr(self, "extras", None) or []))
+
     def is_running(self) -> bool:
         return self.process is not None and self.process.poll() is None
 
@@ -180,7 +192,8 @@ class ProxyState:
         Honours `degraded`: after the crash-loop breaker trips, a request must not quietly
         re-trigger the load that failed five times. The user loads a model by hand instead,
         which re-arms it."""
-        if self.is_running():
+        if self.is_running() or self._extras_serving():
+            # multi mode: while the primary restarts, the other servers keep answering (the watchdog relaunches it)
             return
         if self.degraded:
             raise RuntimeError(
@@ -188,7 +201,7 @@ class ProxyState:
                 or "the model server is not running and automatic restart is off; "
                    "load a model in Settings → Models & Jobs to start it again.")
         async with self.lock:
-            if self.is_running():
+            if self.is_running() or self._extras_serving():
                 return
             await self._load_locked(target)
 
@@ -223,6 +236,45 @@ class ProxyState:
             raise ValueError("Invalid profile target")
 
         vllm_mode = engine_of(self.profile) == "vllm"
+        specs: list = []
+        if not vllm_mode:
+            # first: the server mode and its list are stored per runtime (runtime_tuned), and only apply_runtime puts the
+            # active runtime's copy in profile["tuned"]. Deciding before it missed "multi" saved for this runtime.
+            # Idempotent: build_launch_command applies it again.
+            apply_runtime(self.profile)
+        if not vllm_mode and main_mode(self.profile) == "multi":
+            specs = instance_specs(self.profile)
+        multi = bool(specs)
+        if multi:
+            # every server is checked before any is started: a bad second server must not leave the first one running
+            await self._preflight_specs(specs)
+        elif not vllm_mode:
+            # Preflight: refuse to spawn llama-server if the VRAM math says it
+            # won't fit (a WDDM OOM spill hangs the whole desktop on Arc). It runs first
+            # because a MoE model's expert offload is chosen from the free VRAM it measures.
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, vram.check_or_raise, self.profile)
+        self.launch_info = {"engine": engine_of(self.profile), "context_size": self.profile.get("context_size"),
+                            "model_path": self.profile.get("model_path"),
+                            # what the admission gate counts: vLLM runs more requests at once than the saved slot count
+                            "n_slots": (vllm_engine.max_num_seqs(self.profile) if vllm_mode
+                                        else int(self.profile.get("n_slots") or 1))}
+        if multi:
+            # the admission gate counts the primary's slots; the shared profile's count belongs to no one server here
+            self.launch_info["n_slots"] = specs[0]["n_slots"]
+            self.launch_info["mode"] = "multi"
+            self.launch_info["instances"] = [{"index": s["index"], "port": s["port"], "gpus": list(s["gpus"]),
+                                              "n_slots": s["n_slots"]} for s in specs]
+        self._primary_spec = specs[0] if multi else None
+        await self._launch_primary_locked(self._primary_spec)
+        if multi:
+            await self._start_extras(specs[1:])
+        notify_swap()
+
+    async def _launch_primary_locked(self, spec: Optional[dict] = None):
+        """Start instance 0 (or the single server) and wait for /health. The watchdog reuses this to restart
+        only the primary in multi mode, so the other servers keep serving."""
+        vllm_mode = engine_of(self.profile) == "vllm"
         env = None
         if vllm_mode:
             # vLLM reserves its own share of each GPU (--gpu-memory-utilization); the llama.cpp VRAM math does not apply
@@ -230,18 +282,8 @@ class ProxyState:
             cmd = await asyncio.get_event_loop().run_in_executor(None, vllm_engine.build_command, self.profile)
             env = vllm_engine.build_env(self.profile)
         else:
-            # Preflight: refuse to spawn llama-server if the VRAM math says it
-            # won't fit (a WDDM OOM spill hangs the whole desktop on Arc). It runs first
-            # because a MoE model's expert offload is chosen from the free VRAM it measures.
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, vram.check_or_raise, self.profile)
-            cmd = build_launch_command(self.profile)
-            env = build_launch_environment(self.profile)
-        self.launch_info = {"engine": engine_of(self.profile), "context_size": self.profile.get("context_size"),
-                            "model_path": self.profile.get("model_path"),
-                            # what the admission gate counts: vLLM runs more requests at once than the saved slot count
-                            "n_slots": (vllm_engine.max_num_seqs(self.profile) if vllm_mode
-                                        else int(self.profile.get("n_slots") or 1))}
+            cmd = build_launch_command(self.profile, spec)
+            env = build_launch_environment(self.profile, instance=spec)
         print(f"[server_manager] launching ({self.engine_label}): {' '.join(cmd)}")
         if not vllm_mode:
             print(f"[server_manager] launch context: {describe_launch_env(env)}")
@@ -273,8 +315,73 @@ class ProxyState:
             self._log_task = self._spawn_log_pump(self.process)
             log_event("server.load_started", pid=self.process.pid, engine=self.engine,
                       model=Path(str(self.profile.get("model_path") or "")).name)
-            await self._wait_healthy()
-        notify_swap()
+            if spec is None:
+                await self._wait_healthy()
+            else:
+                await self._wait_healthy(watch_gpus=spec["gpus"])
+
+    def _spec_profile(self, spec: dict) -> dict:
+        """The profile as one server will launch it, so the VRAM check sees the same GPUs, split and slots."""
+        p = dict(self.profile)
+        p["tuned"] = dict(p.get("tuned") or {})
+        p["gpu_devices"] = list(spec["gpus"])
+        p["n_slots"] = spec["n_slots"]
+        p["tuned"]["tensor_split"] = spec["tensor_split"] or ",".join("1" for _ in spec["gpus"])
+        return p
+
+    async def _preflight_specs(self, specs: list) -> None:
+        loop = asyncio.get_event_loop()
+        for spec in specs:
+            p = self._spec_profile(spec)
+            try:
+                await loop.run_in_executor(None, vram.check_or_raise, p)
+            except Exception as e:
+                gpus = ",".join(str(g) for g in spec["gpus"])
+                raise RuntimeError(f"Server {spec['index'] + 1} (GPU {gpus}): {e}") from e
+            # the launch must use the offload value this check picked for this server, not the shared profile's
+            spec.pop("_auto_n_cpu_moe", None)
+            if p.get("_auto_n_cpu_moe") is not None:
+                spec["_auto_n_cpu_moe"] = p["_auto_n_cpu_moe"]
+
+    async def _start_extras(self, specs: list) -> None:
+        self.extras = [MainInstance(spec) for spec in specs]
+        for inst in self.extras:
+            try:
+                await inst.start(self.profile)
+            except Exception as e:
+                # the primary is serving: a failed extra stays in the list and the watchdog retries it
+                print(f"[server_manager] {inst.label} failed to start: {e}", file=sys.stderr)
+                log_event("server.extra_failed", index=inst.index + 1, error=str(e)[:300])
+
+    def _stop_extras(self) -> None:
+        extras = list(getattr(self, "extras", None) or [])
+        self.extras = []
+        for inst in extras:
+            inst.stop()
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                continue          # no loop here: the client's sockets go with the process
+            asyncio.create_task(inst.aclose())
+
+    def instances_status(self) -> list:
+        """Every main-model server, primary first. Single mode gives a one-element list."""
+        spec = getattr(self, "_primary_spec", None)
+        profile = self.profile or {}
+        if spec is not None:
+            gpus = list(spec.get("_launch_gpu_devices") or spec["gpus"])
+        else:
+            gpus = list(profile.get("_launch_gpu_devices") or profile.get("gpu_devices") or [])
+        running = self.is_running()
+        primary = {
+            "index": 0, "port": LLAMA_SERVER_PORT, "gpus": gpus,
+            "n_slots": int((getattr(self, "launch_info", None) or {}).get("n_slots") or profile.get("n_slots") or 1),
+            "healthy": self.healthy, "loading": self.loading,
+            "pid": self.process.pid if running else None,
+            "uptime_s": round(time.time() - self.started_at, 1) if running and self.started_at else None,
+            "restart_count": self.restart_count, "degraded": self.degraded, "error": self.last_load_error,
+        }
+        return [primary] + [inst.status() for inst in getattr(self, "extras", None) or []]
 
     async def stop(self, clear_profile: bool = False):
         async with self.lock:
@@ -346,7 +453,7 @@ class ProxyState:
                 return m.group(1)
         return None
 
-    async def _wait_healthy(self):
+    async def _wait_healthy(self, watch_gpus=None):
         vllm_mode = self.engine == "vllm"
         timeout_s = vllm_engine.health_timeout_s() if vllm_mode else health_timeout_s()
         deadline = time.time() + timeout_s
@@ -355,7 +462,9 @@ class ProxyState:
         # spilling into shared RAM and hanging the desktop.
         target_idx: set = set()
         try:
-            if self.profile and not vllm_mode:
+            if watch_gpus is not None:
+                target_idx = set(watch_gpus)          # multi mode: this server's own cards
+            elif self.profile and not vllm_mode:
                 target_idx = set(vram.effective_params(self.profile)["gpu_devices"])
         except Exception:
             pass
@@ -498,6 +607,7 @@ class ProxyState:
             kill_process_tree(self.process, timeout=15)     # vLLM leader crashed: stop the workers it left behind
         if self.process is not None:
             log_event("server.stopped", pid=self.process.pid)
+        self._stop_extras()
         forget_engine_pid()
         self.launch_info = {}
         self.process = None
@@ -523,6 +633,7 @@ class ProxyState:
         backoff = 1
         while True:
             await asyncio.sleep(watchdog_interval_s())
+            await self._supervise_extras()
             if self.process is None:
                 continue
             if self.process.poll() is None:
@@ -586,13 +697,29 @@ class ProxyState:
                     # here would reset the count on every attempt and the breaker would never
                     # trip. This is the one restart path that must not clear the budget.
                     async with self.lock:
-                        await self._load_locked(target)
+                        if getattr(self, "_primary_spec", None) is not None and getattr(self, "extras", None):
+                            # multi mode: relaunch only instance 0. A full _load_locked would stop the other
+                            # servers too, and they are still serving
+                            self._cancel_log_pump()
+                            await self._preflight_specs([self._primary_spec])
+                            await self._launch_primary_locked(self._primary_spec)
+                            notify_swap()
+                        else:
+                            await self._load_locked(target)
                     backoff = 1     # _wait_healthy cleared the counters on success
             except Exception as e:
                 print(f"[server_manager] restart failed: {e}", file=sys.stderr)
                 # the failed attempt is not running either, so nothing is wedged, but the
                 # process handle is: drop it or the watchdog sees a dead handle every tick
                 self._kill_process_silently()
+
+    async def _supervise_extras(self) -> None:
+        """Each extra gets its own restart bookkeeping (core/main_server.py); one failing never stops the rest."""
+        for inst in list(getattr(self, "extras", None) or []):
+            try:
+                await inst.supervise_once(self.profile)
+            except Exception as e:      # noqa: BLE001 - the primary's watchdog must keep running
+                print(f"[server_manager] {inst.label} supervision error: {e}", file=sys.stderr)
 
     def _kill_process_silently(self) -> None:
         """Reclaim a dead process handle without the 'stopping current llama-server' noise.
@@ -686,11 +813,32 @@ def keepalive_idle_s(n_slots: int, interval_s: float, profile: Optional[dict] = 
 state = ProxyState()
 
 
+async def _keepalive_extras() -> None:
+    """The primary's ping, for each healthy extra server, on its own last slot."""
+    for inst in list(getattr(state, "extras", None) or []):
+        if not inst.healthy or not inst.is_running():
+            continue
+        if time.time() - inst.last_activity < keepalive_idle_s(inst.n_slots, state.keepalive_interval_s, state.profile):
+            continue
+        try:
+            await inst.client.post("/completion", json={
+                "prompt": keepalive_prompt(state.profile),
+                "n_predict": 1,
+                "cache_prompt": False,
+                "id_slot": max(0, inst.n_slots - 1),
+            }, timeout=60.0)
+            inst.last_activity = time.time()
+        except Exception:
+            pass
+
+
 async def keepalive_loop():
     while True:
         await asyncio.sleep(5)
         if not state.keepalive_enabled:
             continue
+        # before the primary checks: a stopped primary must not skip the extras' pings
+        await _keepalive_extras()
         if state.process is None or state.process.poll() is not None:
             continue
         if state.engine == "vllm":

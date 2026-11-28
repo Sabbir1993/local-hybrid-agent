@@ -85,9 +85,44 @@ def _may_read_log(user) -> bool:
         return False
 
 
+def _ctx_from_slot(s0: dict) -> dict:
+    n_ctx = s0.get("n_ctx") or 32768
+    n_prompt = s0.get("n_prompt_tokens") or 0
+    n_decoded = (s0.get("next_token") or [{}])[0].get("n_decoded") or 0
+    n_past = n_prompt + n_decoded
+    return {"n_ctx": n_ctx, "n_past": n_past, "n_prompt": n_prompt,
+            "pct": round((n_past / max(1, n_ctx)) * 100, 1)}
+
+
+async def _multi_caller_ctx(user: Optional[Principal]) -> tuple:
+    """Multi mode: the caller's own slot on the instance its chat runs on (latest chat when there is no default
+    session). Returns (context figures, 1-based instance number or None). Falls back to the primary's first slot."""
+    from core import serving_slots
+    mine = None
+    if user is not None and user.id is not None:
+        mine = serving_slots.user_instance_slot(user.id, None) or serving_slots.latest_user_instance(user.id)
+    try:
+        if mine is not None:
+            inst, slot = mine
+            slots = await serving_slots.main_slots(index=inst)
+            if slots:
+                return _ctx_from_slot(slots[min(len(slots) - 1, slot)]), inst + 1
+        slots = await serving_slots.main_slots()
+        if slots:
+            return _ctx_from_slot(slots[0]), None
+    except Exception:
+        pass
+    return {"n_ctx": 32768, "n_past": 0, "n_prompt": 0, "pct": 0.0}, None
+
+
 async def get_system_status(user: Optional[Principal] = None) -> dict:
+    from core import main_router
     ctx_info = {"n_ctx": 32768, "n_past": 0, "n_prompt": 0, "pct": 0.0}
-    if state.process and state.process.poll() is None:
+    multi = main_router.is_multi()
+    my_instance = None
+    if multi:
+        ctx_info, my_instance = await _multi_caller_ctx(user)
+    elif state.process and state.process.poll() is None:
         try:
             from core import serving_slots
             slots = await serving_slots.main_slots()          # shared by every viewer, at most 1 s old
@@ -156,6 +191,11 @@ async def get_system_status(user: Optional[Principal] = None) -> dict:
         "vision_capable": bool(state.profile.get("vision_capable")) if state.profile else False,
         "mmproj_path": state.profile.get("mmproj_path") if state.profile else None,
         "context": ctx_info,
+        # every main-model server, primary first (one element in single mode); "multi" or "single"
+        "main_instances": state.instances_status(),
+        "main_mode": "multi" if multi else "single",
+        # multi only: the 1-based number of the server the caller's chat runs on (None when it has no slot yet)
+        **({"my_instance": my_instance} if multi else {}),
         # cloud lanes: the UI shows a ☁️ pill instead of "Model unloaded"
         "main_source": "cloud" if cm_main else "local",
         "executor_source": "cloud" if cm_exec else "local",

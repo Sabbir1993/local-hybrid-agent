@@ -283,18 +283,30 @@
   #sec-cfg .model-group { width: 100%; position: relative; overflow: visible; }
   #sec-cfg .model-group select { max-width: none; }
   #sec-cfg .model-picker-btn { max-width: none; flex: 1; }
-  /* engine select (3/12) + model picker (9/12) on one row; stacked under 700px */
-  #sec-cfg .engine-model-row { display: flex; flex-wrap: wrap; gap: 0 12px; align-items: flex-start; margin-bottom: 4px; }
-  #sec-cfg .emr-engine { flex: 3 1 170px; min-width: 0; }
-  #sec-cfg .emr-model { flex: 9 1 360px; min-width: 0; }
+  /* runtime engine (2/12) + server mode (2/12) + model picker (8/12) on one row; stacked under 700px */
+  #sec-cfg .engine-model-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(0, 8fr); gap: 0 12px; align-items: start; margin-bottom: 4px; }
+  #sec-cfg .emr-engine, #sec-cfg .emr-mode, #sec-cfg .emr-model { min-width: 0; }
+  /* 4 cache/RAM fields on one row; 2 columns at medium widths, 1 column on phones */
+  #sec-cfg .cfg-row4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 10px; }
+  #sec-cfg .cfg-row4 .cfg-item label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #sec-cfg .cfg-row4 input { width: 100%; min-width: 0; }
+  /* the narrow-screen rules force every .cfg-item to a full row; keep the cells in their grids */
+  #sec-cfg .cfg-row4 > .cfg-item, #sec-cfg .engine-model-row > .cfg-item { grid-column: auto !important; }
+  #sec-cfg #cfg-main-help, #sec-cfg #cfg-main-reason { display: block; }
   #sec-cfg .engine-model-row .cfg-item label { display: block; margin: 6px 0 3px; font-size: 10.5px; color: var(--dim); font-weight: 600; }
   /* the select takes its look and 38px height from the shared input rules; the picker is sized to match */
   #sec-cfg .emr-select { display: block; width: 100%; max-width: none; margin: 0; text-overflow: ellipsis; }
   #sec-cfg .emr-model .model-group { height: 38px; box-sizing: border-box; }
   #sec-cfg .emr-note { display: block; color: var(--dim); font-size: 9.5px; line-height: 1.4; margin: 0 0 6px; }
   #sec-cfg .emr-note:empty { display: none; }
+  @media (max-width: 860px) {
+    #sec-cfg .cfg-row4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 560px) {
+    #sec-cfg .cfg-row4 { grid-template-columns: minmax(0, 1fr); }
+  }
   @media (max-width: 700px) {
-    #sec-cfg .emr-engine, #sec-cfg .emr-model { flex: 1 1 100%; }
+    #sec-cfg .engine-model-row { grid-template-columns: minmax(0, 1fr); }
     #sec-cfg .emr-model .model-group { height: auto; min-height: 38px; }
     #sec-cfg .model-picker-btn { flex-wrap: wrap; min-width: 0; padding: 6px 10px; gap: 4px 7px; height: auto; min-height: 38px; }
     #sec-cfg .model-picker-btn .mpi-caps { margin-left: 0; flex-wrap: wrap; justify-content: flex-start; }
@@ -458,6 +470,7 @@
     .settings-panel, .settings-panel .card { max-width: 100%; box-sizing: border-box; min-width: 0; }
     .settings-panel .cfg-grid,
     .settings-panel .cfg-row3 { grid-template-columns: minmax(0, 1fr); }
+    /* cfg-row4 collapses to one column at phone widths via the #sec-cfg rule in the 560px query */
     .settings-panel .cfg-item,
     .settings-panel .cfg-span-2 { min-width: 0; max-width: 100%; grid-column: 1 / -1; }
     .settings-panel input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
@@ -1021,6 +1034,7 @@
             </div>
             <div id="gpu-list" style="margin-top:8px;"><div class="dim" style="font-size:12px">Click "⚡ Check GPU" or select tab to query status…</div></div>
             <div id="gpu-lane-vram" style="margin-top:4px;"></div>
+            <div id="main-servers" class="main-servers" aria-live="polite"></div>
           </div>
         </div>
       </div>
@@ -1047,14 +1061,21 @@
             <span id="rt-note" class="dim" style="font-size:11px;"></span>
           </div>
         </details>
-        <!-- Engine (3/12) and model picker (9/12) on one row; wraps to two full-width lines on narrow screens.
-             Engine: llama.cpp (llama-server) or vLLM. Chosen before loading; saved per model. -->
+        <!-- Runtime engine (2/12), server mode (2/12) and model picker (8/12) on one row; stacks full-width under 700px.
+             Engine: llama.cpp (llama-server) or vLLM. Chosen before loading; saved per model. Server-mode help text sits under the row. -->
         <div class="engine-model-row">
           <div class="emr-engine cfg-item">
             <label for="cfg-engine">Runtime engine</label>
             <select id="cfg-engine" class="emr-select" title="Program that runs this model. llama.cpp: runs GGUF files, works on one or several GPUs, supports MTP drafts (faster output) and a share per GPU. vLLM: runs Hugging Face model folders, serves many users at once by batching, starts slower (minutes), and uses the GPUs set by tensor/pipeline parallel. The choice is saved per model; click Unload, then Load to switch.">
               <option value="llama" title="llama.cpp (llama-server): runs GGUF files, works on one or several GPUs, supports MTP drafts (faster output) and a share per GPU. Saved per model; Unload, then Load to switch.">llama.cpp (llama-server)</option>
               <option value="vllm" title="vLLM: runs Hugging Face model folders, serves many users at once by batching, starts slower (minutes), and uses the GPUs set by tensor/pipeline parallel. Saved per model; Unload, then Load to switch.">vLLM</option>
+            </select>
+          </div>
+          <div class="emr-mode cfg-item">
+            <label for="cfg-main-mode">Server mode <span class="info" title="One server spreads the model over the selected GPUs. Several servers run a full copy per GPU group">ⓘ</span></label>
+            <select id="cfg-main-mode" class="emr-select" aria-describedby="cfg-main-help cfg-main-reason" title="One server, or several servers that each take some of the GPUs">
+              <option value="single">One server</option>
+              <option value="multi">Several servers</option>
             </select>
           </div>
           <div class="emr-model cfg-item">
@@ -1073,6 +1094,8 @@
           </div>
         </div>
         <small id="cfg-engine-note" class="emr-note"></small>
+        <small class="cfg-note" id="cfg-main-help">One server spreads the model over the selected GPUs. Several servers run a full copy per GPU group and send each chat to the least busy one: faster with many users, but each chat gets less room.</small>
+        <small class="cfg-note main-reason" id="cfg-main-reason" hidden></small>
         <details id="load-log" style="display:none; margin:2px 0 8px;">
           <summary style="cursor:pointer; font-size:11px; color:var(--warn, #d9a441); font-weight:600;">The last load failed: what the server printed</summary>
           <pre id="load-log-text" style="margin:6px 0 0; padding:8px 10px; max-height:240px; overflow:auto; font-size:10.5px; line-height:1.4; white-space:pre-wrap; word-break:break-word; background:var(--bg-input, #0d1117); border:1px solid var(--border); border-radius:8px; color:var(--text);"></pre>
@@ -1124,6 +1147,20 @@
           <div class="cfg-item cfg-full" title="Extra vLLM arguments for this model only, added at the end of the command line">
             <label for="cfg-vextra">Extra arguments <span class="info" title="e.g. --kv-cache-dtype fp8 --max-num-batched-tokens 8192">ⓘ</span></label>
             <input type="text" id="cfg-vextra" placeholder="e.g. --kv-cache-dtype fp8" title="Extra vLLM command-line arguments">
+          </div>
+        </div>
+        <!-- Server mode: one llama-server (default) or several, each with its own GPUs and parallel slots.
+             config.js (mainModeUi) hides the single-server GPU/split/slot fields while "Several servers" is picked. -->
+        <div class="main-mode-block">
+          <div id="cfg-main-multi" hidden>
+            <div id="cfg-main-rows" class="main-rows"></div>
+            <div class="main-tools">
+              <button type="button" class="btn sm secondary" id="cfg-main-add">Add server</button>
+              <small class="cfg-note" id="cfg-main-count"></small>
+            </div>
+            <div id="cfg-main-warn" class="main-msg warn" role="status" hidden></div>
+            <div id="cfg-main-err" class="main-msg err" role="alert" hidden></div>
+            <div id="cfg-main-fit" class="main-fit" hidden></div>
           </div>
         </div>
         <div class="cfg-grid">
@@ -1230,7 +1267,7 @@
             </div>
           </div>
         </div>
-        <div class="cfg-full cfg-row3">
+        <div class="cfg-full cfg-row4">
           <div class="cfg-item" title="Max tokens one conversation may take from the unified pool (--kv-unified-per-slot). Only applied with 2+ slots and a value below the context size">
             <label for="cfg-kvps">Per-slot cap <span class="info" title="0 = no cap. Ignored with 1 slot or when ≥ context size">ⓘ</span></label>
             <input type="number" id="cfg-kvps" min="0" max="2097152" step="1024" value="0" title="Per-slot context cap in tokens (0 = no cap)">

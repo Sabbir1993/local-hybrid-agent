@@ -291,9 +291,15 @@ def per_slot_cap(profile: dict) -> int:
     return cap
 
 
-def build_launch_environment(profile: dict, *, base_env=None) -> dict:
-    """Child environment matching the effective devices chosen for launch."""
-    devices = profile.get("_launch_gpu_devices")
+def build_launch_environment(profile: dict, *, base_env=None, instance: Optional[dict] = None) -> dict:
+    """Child environment matching the effective devices chosen for launch.
+
+    With an instance (multi mode) the devices come from that instance's launch record, not the profile's.
+    """
+    if instance is not None:
+        devices = instance.get("_launch_gpu_devices") or instance["gpus"]
+    else:
+        devices = profile.get("_launch_gpu_devices")
     if devices is None:
         devices = profile.get("gpu_devices") or CONFIG_DEFAULTS["gpu_devices"]
     return build_child_env(
@@ -342,8 +348,30 @@ def exit_signal_note(code) -> str:
         return ""
 
 
-def build_launch_command(profile: dict) -> list[str]:
+def build_launch_command(profile: dict, instance: Optional[dict] = None) -> list[str]:
+    """llama-server argv for the profile, or for one multi-mode instance of it.
+
+    instance = {"index", "port", "gpus", "n_slots", "tensor_split", "single"}. The instance overrides only what is
+    specific to its own server (GPUs, split, port, slot count); everything else comes from the shared profile. The
+    profile itself is left unchanged for the instance case, and the launch device lists go into the instance dict.
+    """
     apply_runtime(profile)
+    port = LLAMA_SERVER_PORT
+    if instance is not None:
+        # Work on a copy: the caller's profile is shared by every instance and by the single-server path.
+        profile = dict(profile)
+        profile["tuned"] = dict(profile.get("tuned") or {})
+        # the single-server tensor split (tuned or profile) belongs to the one-server layout; an instance has its own
+        profile["tuned"].pop("tensor_split", None)
+        gpus = list(instance["gpus"])
+        profile["gpu_devices"] = gpus
+        profile["tensor_split"] = instance.get("tensor_split") or ",".join("1" for _ in gpus)
+        profile["n_slots"] = instance["n_slots"]
+        # the offload chosen by this server's own VRAM check; a value left on the shared profile belongs to another server
+        profile.pop("_auto_n_cpu_moe", None)
+        if instance.get("_auto_n_cpu_moe") is not None:
+            profile["_auto_n_cpu_moe"] = instance["_auto_n_cpu_moe"]
+        port = instance["port"]
     bin_dir = profile.get("llama_bin_dir", CONFIG_DEFAULTS["llama_bin_dir"])
     server_bin = find_llama_server(bin_dir)
     tuned = profile.get("tuned", {})
@@ -378,8 +406,9 @@ def build_launch_command(profile: dict) -> list[str]:
     )
     # state.py builds the child environment after this function returns. Keep
     # the post-zero-share list so visibility and -dev can never disagree.
-    profile["_launch_gpu_devices"] = list(gpu_devices)
-    profile["_launch_device_ids"] = list(device_ids)
+    launch_record = profile if instance is None else instance
+    launch_record["_launch_gpu_devices"] = list(gpu_devices)
+    launch_record["_launch_device_ids"] = list(device_ids)
 
     cmd = [
         str(server_bin),
@@ -388,7 +417,7 @@ def build_launch_command(profile: dict) -> list[str]:
         "-ngl", str(n_gpu_layers),
         "-dev", ",".join(device_ids),
         "-fa", profile.get("flash_attn", CONFIG_DEFAULTS["flash_attn"]),
-        "--port", str(LLAMA_SERVER_PORT),
+        "--port", str(port),
         "--host", "127.0.0.1",
     ]
     # split args only make sense with 2+ GPUs

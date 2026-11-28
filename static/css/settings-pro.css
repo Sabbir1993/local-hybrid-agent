@@ -956,3 +956,42 @@
 #settings-page .am-btns .btn { width: auto; margin: 0; }
 #settings-page .settings-panel > .settings-panel-head h2 .sec-how { width: auto; margin: 0 0 0 auto; padding: 5px 14px; font: 500 12px var(--sp-body); letter-spacing: 0; align-self: center; flex: none; }
 #settings-page .settings-panel > .settings-panel-head h2 .sp-crumb ~ .sec-how { margin-left: 0; }
+
+/* Model Config: server mode (one or several llama-servers). Reuses the card's field, button and tag styles. */
+#sec-cfg [hidden] { display: none !important; }
+.main-mode-block { margin: 2px 0 10px; }
+#cfg-main-multi { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.main-rows { display: flex; flex-direction: column; gap: 8px; }
+#sec-cfg .main-inst { border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); padding: 8px 11px 10px; margin: 0; min-width: 0; }
+#sec-cfg .main-inst legend { font-size: 12px; font-weight: 700; color: var(--text); padding: 0 4px; }
+.main-inst-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.main-inst-port { font-size: 11px; color: var(--dim); }
+.main-gpus { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 8px; }
+#settings-page #sec-cfg .main-gpu-opt { display: inline-flex; align-items: center; gap: 6px; margin: 0; font: 500 11.5px var(--sp-body); color: var(--text); cursor: pointer; }
+#settings-page #sec-cfg .main-gpu-opt.is-off { color: var(--dim); cursor: not-allowed; }
+.mi-gpu-owner { color: var(--dim); font-size: 10.5px; }
+.main-inst-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0 12px; }
+.main-inst-fields .cfg-item { min-width: 0; }
+.main-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.main-tools .btn { width: auto; margin: 0; }
+.main-msg { font-size: 11px; line-height: 1.45; padding: 6px 9px; border-radius: 6px; border: 1px solid var(--border); }
+.main-msg div + div { margin-top: 3px; }
+.main-msg.warn { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
+.main-msg.err { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
+.main-fit { display: flex; flex-direction: column; gap: 6px; font-size: 11px; }
+.main-fit-head { font-size: 10.5px; font-weight: 700; color: var(--dim); }
+.main-fit-row { color: var(--text); line-height: 1.5; }
+.main-fit-text { color: var(--dim); }
+#sec-cfg .main-reason { color: var(--amber); }
+#sec-cfg #cfg-main-mode:focus-visible, #sec-cfg .main-inst input:focus-visible, #sec-cfg .main-gpu-opt input:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+/* Status: one line per server (gpu-status.js renderMainServers) */
+.main-servers { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.main-servers:empty { display: none; }
+.main-servers-head { font-size: 10.5px; font-weight: 700; color: var(--dim); }
+.main-srv { border-left: 2px solid var(--border); padding: 2px 0 2px 9px; }
+.main-srv.is-mine { border-left-color: var(--accent); }
+.main-srv-line { line-height: 1.5; }
+.main-srv-tag { font-size: 10px; font-weight: 700; color: var(--accent); margin-left: 4px; }
+.main-srv-err { color: var(--red); font-size: 11px; margin-top: 2px; }

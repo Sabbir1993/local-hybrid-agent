@@ -15,11 +15,12 @@ from .user_storage import _apply_fallback
 
 
 def suggest_port() -> int:
+    from ..main_instances import RESERVED_PORTS
     from ..small_model import APP_CONFIG
     used = {int((c or {}).get("port") or 0) for c in (APP_CONFIG.get("small_models") or {}).values()
             if isinstance(c, dict)}
     p = 8094
-    while p in used:
+    while p in used or p in RESERVED_PORTS:
         p += 1
     return p
 
@@ -27,11 +28,14 @@ def suggest_port() -> int:
 def _set_port_gpu(name: str, cur: dict, data: dict, sm: dict, cpu_ok: bool = False) -> None:
     """Validate + set a local lane's port and GPU (-1 = CPU when allowed)."""
     from ..config import ACTIVE_RUNTIME, LLAMA_SERVER_PORT
+    from ..main_instances import RESERVED_PORTS
     port = int(data.get("port") or cur.get("port") or suggest_port())
     if not (1024 < port < 65536):
         raise ValueError("port must be between 1025 and 65535")
     if port in (LLAMA_SERVER_PORT, 8000):
         raise ValueError(f"port {port} is used by the main server")
+    if port in RESERVED_PORTS:
+        raise ValueError(f"port {port} is reserved for the main model's extra servers")
     for other, ocfg in sm.items():
         if other != name and isinstance(ocfg, dict) and int(ocfg.get("port") or 0) == port:
             raise ValueError(f"port {port} is already used by '{(ocfg.get('label') or other)}'")

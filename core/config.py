@@ -154,6 +154,8 @@ RUNTIME_KEYS = ("llama_bin_dir", "backend", "gpu_devices")
 RUNTIME_TUNED_KEYS = (
     "tensor_split", "n_gpu_layers", "n_cpu_moe",
     "measured_tg_tokens_per_sec", "measured_pp_tokens_per_sec", "tuned_at",
+    # GPU indexes differ between Vulkan and SYCL, so the server list is per runtime too
+    "main_mode", "main_instances",
 )
 
 
@@ -446,6 +448,9 @@ def apply_runtime(profile: dict) -> dict:
         # those compatibility fields become a fallback for another backend.
         profile.pop("n_gpu_layers", None)
         profile.pop("tensor_split", None)
+        # the server list names GPUs by this runtime's indexes; another runtime's copy must not leak in
+        profile.pop("main_mode", None)
+        profile.pop("main_instances", None)
         selected = runtime_tuned.get(ACTIVE_RUNTIME["name"])
         profile["tuned"] = dict(selected) if isinstance(selected, dict) else {}
     return profile
@@ -478,6 +483,8 @@ CONFIG_CHOICE_FIELDS = {
     "engine": ("llama", "vllm"),
     "vllm_dtype": ("auto", "bfloat16", "float16"),
     "vllm_quantization": ("auto", "fp8", "awq", "gptq", "gguf"),
+    # "multi" runs the main model as several llama-server instances (core/main_instances.py)
+    "main_mode": ("single", "multi"),
 }
 
 # Where each key lives inside the profile JSON
@@ -504,6 +511,8 @@ CONFIG_TARGETS = {
     "gpu_memory_utilization_pct": (None, "gpu_memory_utilization_pct"),
     "vllm_dtype": (None, "vllm_dtype"),
     "vllm_quantization": (None, "vllm_quantization"),
+    "main_mode": ("tuned", "main_mode"),
+    "main_instances": ("tuned", "main_instances"),
 }
 
 # Persisted per-model overrides
@@ -518,4 +527,5 @@ MODEL_CONFIG_KEYS = (
     "engine", "tensor_parallel_size", "pipeline_parallel_size", "gpu_memory_utilization_pct",
     "vllm_dtype", "vllm_quantization", "vllm_tokenizer", "vllm_tool_parser", "vllm_reasoning_parser",
     "vllm_enforce_eager", "vllm_extra_args",
+    "main_mode", "main_instances",
 )

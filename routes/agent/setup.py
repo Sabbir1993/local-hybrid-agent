@@ -148,6 +148,8 @@ async def setup_run(req, request: Request, user: Principal) -> RunContext:
             raise SetupError({"error": "session not found"}, 404)
     from core.agent_tools import set_current_user
     set_current_user(user.id)
+    from core.request_context import set_current_session
+    set_current_session(req.session_id)                 # the run's chat session: one main-model instance (multi mode)
     from core import voice_policy
     voice_policy.apply(req, cap_tokens=False)    # spoken turn: no hidden reasoning, no answer-check rewrite (a tool call may need long arguments, so no token cap)
     ctx.effort = reasoning_mod.resolve(req.reasoning_effort)

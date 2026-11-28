@@ -606,6 +606,7 @@ function fillConfigForm(c) {
     }
     if ($('cfg-vision')) { $('cfg-vision').checked = visAvail && !!c.vision_capable; $('cfg-vision').disabled = !visAvail; }
     fillEngineFields(c);
+    fillMainMode(c);
 }
 
 /* ---- engine: llama.cpp or vLLM (core/engines). The choice and the vLLM fields are saved per model. ---- */
@@ -645,7 +646,7 @@ function applyEngineUI() {
     const item = $(id) && $(id).closest('.cfg-item');
     if (item) item.style.display = vllm ? 'none' : '';
   });
-  document.querySelectorAll('#sec-cfg .cfg-switches-row, #sec-cfg .cfg-row3').forEach(el => {
+  document.querySelectorAll('#sec-cfg .cfg-switches-row, #sec-cfg .cfg-row3, #sec-cfg .cfg-row4').forEach(el => {
     el.style.display = vllm ? 'none' : '';
   });
   const notes = [];
@@ -860,11 +861,290 @@ async function tsOptions() {
 }
 
 if ($('cfg-ngl')) $('cfg-ngl').addEventListener('input', layersInfo);
-['cfg-ctx', 'cfg-ct'].forEach(id => { if ($(id)) { $(id).addEventListener('input', tsOptionsSoon); $(id).addEventListener('change', tsOptionsSoon); } });
+['cfg-ctx', 'cfg-ct'].forEach(id => { if ($(id)) { $(id).addEventListener('input', tsOptionsSoon); $(id).addEventListener('change', tsOptionsSoon); $(id).addEventListener('change', mainFitSoon); } });
 
 if ($('cfg-ts')) $('cfg-ts').addEventListener('input', () => { updateGpuDependentFields(); tsRowsFromText(); });
 if ($('ts-equal')) $('ts-equal').onclick = () => tsSetShares(cfgGpuIdx.map(() => 1));
 if ($('ts-auto')) $('ts-auto').onclick = () => tsSetShares(tsAutoShares() || cfgGpuIdx.map(() => 1));
+
+/* ---- Server mode: one llama-server, or several (main_instances). Rows are rebuilt only when the list changes
+   (add, remove, mode); checkbox and number edits update state and sync the controls around them, so focus stays put. ---- */
+const MAIN_MAX_SERVERS = 8, MAIN_MAX_SLOTS = 64;
+let cfgMainInst = [];          // [{gpus:[int], n_slots:string, tensor_split:string}] - n_slots kept as typed, checked on Apply
+let cfgMainPorts = [];         // ports from the server; instance 1 = 8090, 2..8 = 8191..8197
+let cfgMainWarnings = [];
+let cfgMainAllowed = true;     // false on the vLLM engine
+let cfgMainSavedMulti = false; // the saved config is in several-servers mode (what the fit check describes)
+
+function mainPortFor(i) {
+  if (Array.isArray(cfgMainPorts) && cfgMainPorts[i] != null) return cfgMainPorts[i];
+  return i === 0 ? 8090 : 8191 + i - 1;
+}
+
+/* GPUs offered in the rows: the runtime's GPUs, plus any saved GPU the runtime no longer lists (so it stays visible) */
+function mainGpuChoices() {
+  const set = new Set(cfgGpuIdx);
+  cfgMainInst.forEach(s => s.gpus.forEach(g => set.add(g)));
+  return [...set].sort((a, b) => a - b);
+}
+
+function mainGpuOwner(gi, except) {   // index of the other row that uses this GPU, or -1
+  return cfgMainInst.findIndex((s, i) => i !== except && s.gpus.includes(gi));
+}
+
+function mainGpuName(gi) {
+  const d = tsGpuInfo(gi);
+  return `GPU ${gi}${d ? ' · ' + d.total_gb + ' GB' : ''}`;
+}
+
+/* Saved list is empty: one server per runtime GPU, each with that GPU and the single-server slot count split evenly */
+function mainDefaultInst() {
+  const n = Math.max(1, Math.min(MAIN_MAX_SERVERS, cfgGpuIdx.length));
+  const slots = String(Math.max(1, Math.floor((parseInt($('cfg-np').value, 10) || 1) / n)));
+  if (!cfgGpuIdx.length) return [{ gpus: [], n_slots: slots, tensor_split: '' }];
+  return cfgGpuIdx.slice(0, MAIN_MAX_SERVERS).map(g => ({ gpus: [g], n_slots: slots, tensor_split: '' }));
+}
+
+function mainRowsBuild() {
+  const box = $('cfg-main-rows');
+  if (!box) return;
+  const choices = mainGpuChoices();
+  box.innerHTML = cfgMainInst.map((s, i) => {
+    const n = i + 1;
+    const gpuOpts = choices.map(gi => {
+      const owner = mainGpuOwner(gi, i);
+      const on = s.gpus.includes(gi);
+      return `<label class="main-gpu-opt" title="${owner >= 0 ? 'Used by Server ' + (owner + 1) : esc(mainGpuName(gi))}">`
+        + `<input type="checkbox" class="mi-gpu" data-i="${i}" data-gpu="${gi}"${on ? ' checked' : ''}${owner >= 0 ? ' disabled' : ''}>`
+        + `<span class="mi-gpu-name">${esc(mainGpuName(gi))}</span>`
+        + `<span class="mi-gpu-owner">${owner >= 0 ? ' · used by Server ' + (owner + 1) : ''}</span></label>`;
+    }).join('') || '<span class="dim">The runtime lists no GPUs. Set GPU devices in Runtime &amp; GPU backend first.</span>';
+    return `<fieldset class="main-inst">
+      <legend>Server ${n}</legend>
+      <div class="main-inst-head">
+        <span class="main-inst-port">Port ${mainPortFor(i)}</span>
+        ${cfgMainInst.length > 1 ? `<button type="button" class="btn sm secondary mi-remove" data-i="${i}" aria-label="Remove Server ${n}">Remove</button>` : ''}
+      </div>
+      <div class="main-gpus" role="group" aria-label="GPUs for Server ${n}">${gpuOpts}</div>
+      <div class="main-inst-fields">
+        <div class="cfg-item">
+          <label for="mi-slots-${i}">Parallel slots</label>
+          <input type="number" id="mi-slots-${i}" class="mi-slots" data-i="${i}" min="1" max="${MAIN_MAX_SLOTS}" value="${esc(s.n_slots)}">
+        </div>
+        <div class="cfg-item mi-ts-wrap" ${s.gpus.length > 1 ? '' : 'hidden'}>
+          <label for="mi-ts-${i}">Tensor split</label>
+          <input type="text" id="mi-ts-${i}" class="mi-ts" data-i="${i}" value="${esc(s.tensor_split)}" placeholder="Equal" spellcheck="false" autocomplete="off">
+          <small class="cfg-note">One number per GPU, in order. Blank splits evenly.</small>
+        </div>
+      </div>
+    </fieldset>`;
+  }).join('');
+  mainSyncUi();
+}
+
+/* Updates everything around the rows without rebuilding them: GPU owner labels, tensor split visibility, add button, count */
+function mainSyncUi() {
+  cfgMainInst.forEach((s, i) => {
+    const wrap = document.querySelector(`#cfg-main-rows .main-inst:nth-child(${i + 1}) .mi-ts-wrap`);
+    if (wrap) wrap.hidden = s.gpus.length < 2;
+  });
+  document.querySelectorAll('#cfg-main-rows .mi-gpu').forEach(el => {
+    const i = Number(el.dataset.i), gi = Number(el.dataset.gpu), owner = mainGpuOwner(gi, i);
+    const label = el.closest('label');
+    el.disabled = owner >= 0;
+    if (label) {
+      label.title = owner >= 0 ? 'Used by Server ' + (owner + 1) : mainGpuName(gi);
+      const o = label.querySelector('.mi-gpu-owner');
+      if (o) o.textContent = owner >= 0 ? ' · used by Server ' + (owner + 1) : '';
+    }
+  });
+  const used = new Set(cfgMainInst.flatMap(s => s.gpus));
+  const free = cfgGpuIdx.filter(g => !used.has(g));
+  const add = $('cfg-main-add');
+  if (add) add.disabled = cfgMainInst.length >= MAIN_MAX_SERVERS || free.length === 0;
+  const count = $('cfg-main-count');
+  if (count) {
+    count.textContent = `${cfgMainInst.length} of ${MAIN_MAX_SERVERS} servers`
+      + (cfgGpuIdx.length ? ` · ${used.size} of ${cfgGpuIdx.length} GPUs in use` : '');
+  }
+}
+
+function mainWarnUi() {
+  const w = $('cfg-main-warn');
+  if (!w) return;
+  w.innerHTML = cfgMainWarnings.map(m => `<div>${esc(m)}</div>`).join('');
+  w.hidden = !cfgMainWarnings.length;
+}
+
+function mainShowErr(msgs) {
+  const e = $('cfg-main-err');
+  if (!e) return;
+  e.innerHTML = msgs.map(m => `<div>${esc(m)}</div>`).join('');
+  e.hidden = !msgs.length;
+}
+
+/* Single-server fields hide (kept, not cleared) while several servers are on */
+function mainSingleFields() {
+  return ['cfg-np', 'cfg-ts', 'cfg-sm'].map(id => $(id) && $(id).closest('.cfg-item')).filter(Boolean);
+}
+
+/* Effective mode for the UI: several servers only where the engine allows it */
+function mainModeOn() {
+  const sel = $('cfg-main-mode');
+  return !!sel && sel.value === 'multi' && mainAllowedNow();
+}
+
+function mainAllowedNow() {
+  const engine = $('cfg-engine') ? $('cfg-engine').value : 'llama';
+  return cfgMainAllowed && engine !== 'vllm';
+}
+
+function mainModeUi() {
+  const sel = $('cfg-main-mode');
+  if (!sel) return;
+  const allowed = mainAllowedNow();
+  if (!allowed) sel.value = 'single';
+  sel.disabled = !allowed;
+  const reason = $('cfg-main-reason');
+  if (reason) {
+    reason.textContent = allowed ? '' : 'Several servers needs the llama.cpp engine. vLLM runs one server.';
+    reason.hidden = allowed;
+  }
+  const multi = sel.value === 'multi';
+  const block = $('cfg-main-multi');
+  if (block) block.hidden = !multi;
+  mainSingleFields().forEach(el => { el.hidden = multi; });
+  if (multi) mainSyncUi();
+}
+
+/* Fit check per server: the saved config's instances from /control/preflight (uses the same plan shape as the single fit) */
+function planFitHtml(plan) {
+  plan = plan || {};
+  const st = plan.status;
+  const tag = st === 'nofit' ? '<span class="ts-opt-tag bad">does not fit</span>'
+    : st === 'tight' ? '<span class="ts-opt-tag warn">tight fit</span>'
+    : st === 'fit' ? '<span class="ts-opt-tag ok">fits</span>'
+    : '<span class="ts-opt-tag">not checked</span>';
+  const est = plan.estimate || {};
+  const mem = est.weights_gb != null ? ` · weights ${esc(est.weights_gb)} GB + context ${esc(est.kv_gb)} GB` : '';
+  const note = (st === 'nofit' || st === 'unknown') && plan.message ? ` · ${esc(plan.message)}` : '';
+  return `${tag}<span class="main-fit-text">${mem}${note}</span>`;
+}
+
+let mainFitTimer = null, mainFitSeq = 0;
+function mainFitSoon() { clearTimeout(mainFitTimer); mainFitTimer = setTimeout(mainFit, 450); }
+async function mainFit() {
+  const box = $('cfg-main-fit');
+  if (!box) return;
+  const hide = () => { box.hidden = true; box.innerHTML = ''; };
+  if (!cfgMainSavedMulti) return hide();
+  const sel = $('profile');
+  const q = new URLSearchParams();
+  if (sel && sel.value) q.set('target', sel.value);
+  if ($('cfg-ctx') && parseInt($('cfg-ctx').value) >= 512) q.set('ctx', $('cfg-ctx').value);
+  if ($('cfg-ct') && $('cfg-ct').value) q.set('kv', $('cfg-ct').value);
+  const seq = ++mainFitSeq;
+  let plan;
+  try {
+    const r = await fetch('/control/preflight?' + q.toString());
+    if (!r.ok) return hide();
+    plan = await r.json();
+  } catch (e) { return hide(); }
+  if (seq !== mainFitSeq) return;
+  if (!Array.isArray(plan.instances) || !plan.instances.length) return hide();
+  box.hidden = false;
+  box.innerHTML = `<div class="main-fit-head">Fit per server, for the saved config</div>` + plan.instances.map((inst, i) =>
+    `<div class="main-fit-row${inst.ok === false ? ' bad' : ''}"><b>Server ${i + 1}</b> <span class="mono">port ${esc(inst.port)}</span> `
+    + `<div>${planFitHtml(inst.plan)}</div></div>`).join('');
+}
+
+/* Load: fill the list from the server (or the default when several servers is on with no saved list) */
+function fillMainMode(c) {
+  cfgMainAllowed = c.main_multi_allowed !== false;
+  cfgMainPorts = Array.isArray(c.main_instance_ports) ? c.main_instance_ports.slice() : [];
+  cfgMainWarnings = Array.isArray(c.main_instance_warnings) ? c.main_instance_warnings.slice() : [];
+  cfgMainSavedMulti = c.main_mode === 'multi';
+  cfgMainInst = (Array.isArray(c.main_instances) ? c.main_instances : []).map(x => ({
+    gpus: (x.gpus || []).map(Number),
+    n_slots: String(x.n_slots ?? 1),
+    tensor_split: x.tensor_split ? String(x.tensor_split) : '',
+  }));
+  const sel = $('cfg-main-mode');
+  if (sel) sel.value = cfgMainSavedMulti ? 'multi' : 'single';
+  if (cfgMainSavedMulti && !cfgMainInst.length) cfgMainInst = mainDefaultInst();
+  mainRowsBuild();
+  mainWarnUi();
+  mainShowErr([]);
+  mainModeUi();
+  mainFitSoon();
+}
+
+if ($('cfg-main-mode')) $('cfg-main-mode').addEventListener('change', () => {
+  if ($('cfg-main-mode').value === 'multi' && !cfgMainInst.length) cfgMainInst = mainDefaultInst();
+  mainRowsBuild();
+  mainShowErr([]);
+  mainModeUi();
+});
+if ($('cfg-engine')) $('cfg-engine').addEventListener('change', mainModeUi);
+if ($('cfg-main-add')) $('cfg-main-add').addEventListener('click', () => {
+  const used = new Set(cfgMainInst.flatMap(s => s.gpus));
+  const free = cfgGpuIdx.filter(g => !used.has(g));
+  if (cfgMainInst.length >= MAIN_MAX_SERVERS || !free.length) return;
+  cfgMainInst.push({ gpus: [free[0]], n_slots: '1', tensor_split: '' });
+  mainRowsBuild();
+  const f = $(`mi-slots-${cfgMainInst.length - 1}`);
+  if (f) f.focus();
+});
+if ($('cfg-main-rows')) {
+  const rows = $('cfg-main-rows');
+  rows.addEventListener('change', e => {
+    const t = e.target;
+    if (t.classList.contains('mi-gpu') && !t.disabled) {
+      const i = Number(t.dataset.i), gi = Number(t.dataset.gpu), s = cfgMainInst[i];
+      if (!s) return;
+      s.gpus = t.checked ? [...s.gpus, gi].sort((a, b) => a - b) : s.gpus.filter(g => g !== gi);
+      mainSyncUi();
+    }
+  });
+  rows.addEventListener('input', e => {
+    const t = e.target, i = Number(t.dataset.i), s = cfgMainInst[i];
+    if (!s) return;
+    if (t.classList.contains('mi-slots')) s.n_slots = t.value;
+    if (t.classList.contains('mi-ts')) s.tensor_split = t.value;
+  });
+  rows.addEventListener('click', e => {
+    const b = e.target.closest('.mi-remove');
+    if (!b) return;
+    cfgMainInst.splice(Number(b.dataset.i), 1);
+    mainRowsBuild();
+    const add = $('cfg-main-add');
+    if (add && !add.disabled) add.focus();
+    else { const f = $('mi-slots-0'); if (f) f.focus(); }
+  });
+}
+
+/* Checks the server list before Apply; returns messages, empty when the list is fine */
+function mainValidate() {
+  const errs = [];
+  cfgMainInst.forEach((s, i) => {
+    const n = i + 1;
+    if (!s.gpus.length) errs.push(`Server ${n} needs at least one GPU.`);
+    const sl = Number(String(s.n_slots).trim());
+    if (String(s.n_slots).trim() === '' || !Number.isInteger(sl) || sl < 1 || sl > MAIN_MAX_SLOTS) {
+      errs.push(`Server ${n}: parallel slots must be a whole number from 1 to ${MAIN_MAX_SLOTS}.`);
+    }
+  });
+  return errs;
+}
+
+/* The list as the server expects it (main_instances): ints, slots as numbers, split only with 2+ GPUs */
+function mainPayload() {
+  return cfgMainInst.map(s => ({
+    gpus: [...s.gpus].sort((a, b) => a - b),
+    n_slots: Number(String(s.n_slots).trim()),
+    tensor_split: s.gpus.length > 1 && String(s.tensor_split || '').trim() ? String(s.tensor_split).trim() : null,
+  }));
+}
 
 if ($('btn-apply')) $('btn-apply').onclick = async () => {
   // restore defaults for any field the user cleared
@@ -895,6 +1175,21 @@ if ($('btn-apply')) $('btn-apply').onclick = async () => {
   };
   if ($('cfg-peruser')) updates.max_inflight_per_user = parseInt($('cfg-peruser').value) || 1;
   if ($('cfg-helperslot')) updates.helper_slot = parseInt($('cfg-helperslot').value) || 0;
+  // Server mode: the list is sent only in several-servers mode; back to one server sends main_mode alone (the list is kept)
+  if (mainModeOn()) {
+    const errs = mainValidate();
+    mainShowErr(errs);
+    if (errs.length) {
+      const first = document.querySelector('#cfg-main-rows .main-inst');
+      if (first) first.scrollIntoView({ block: 'nearest' });
+      toast('Fix the server list before saving', true);
+      return;
+    }
+    updates.main_mode = 'multi';
+    updates.main_instances = mainPayload();
+  } else {
+    updates.main_mode = 'single';
+  }
   if ($('cfg-engine')) {
     if ($('cfg-vseqs')) updates.vllm_max_num_seqs_default = parseInt($('cfg-vseqs').value) || 8;
     Object.assign(updates, {

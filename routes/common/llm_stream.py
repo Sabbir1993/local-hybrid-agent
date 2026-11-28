@@ -10,11 +10,12 @@ from typing import Optional
 import httpx
 
 from core import reasoning
+from core import main_router
 from core import serving_slots
 from core.agent_loop import safe_parse_and_repair_args
 from core.limits import cloud_gate
 from core.llm_messages import normalize_system_messages
-from core.request_context import get_current_user_id
+from core.request_context import get_current_session, get_current_user_id
 from core.config import (LOCAL_HTTP_CONNECT_TIMEOUT_S, LOCAL_HTTP_POOL_TIMEOUT_S, LOCAL_HTTP_READ_TIMEOUT_S,
                          LOCAL_HTTP_WRITE_TIMEOUT_S)
 from core.small_model import APP_CONFIG
@@ -43,6 +44,12 @@ def _main_slot_fields() -> dict:
     so their conversation prefix stays cached there between turns (instead of
     landing on whichever slot is free and re-prefilling from token 0)."""
     fields = {"cache_prompt": True}
+    if main_router.is_multi():
+        # the slot chosen by the gate, on the instance the gate chose; never a slot number of another instance
+        chosen = _slot_choice.get()
+        if chosen is not None and (APP_CONFIG.get("serving") or {}).get("slot_affinity", True):
+            fields["id_slot"] = int(chosen)
+        return fields
     n_slots = int((state.profile or {}).get("n_slots") or 1)
     uid = get_current_user_id()
     if n_slots > 1 and uid is not None and (APP_CONFIG.get("serving") or {}).get("slot_affinity", True):
@@ -128,7 +135,7 @@ class _Admission:
 
     def _sems(self, uid):
         # user requests share the user slots; the helper slot (core/serving_slots.py) has its own one-at-a-time gate
-        n = serving_slots.user_slot_count(serving_slots.main_n_slots())
+        n = serving_slots.total_user_slots()
         if self._global is None or n != self._global_n:
             # resized on model (re)load; holders of the old one release it harmlessly
             self._global, self._global_n = asyncio.Semaphore(n), n
@@ -258,28 +265,47 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
         await _acquire_pair(mine, glob)
     admission.recent_waits.append((time.time(), time.time() - t_enter))
     # shared KV pool (-kvu): wait instead of overflowing it, which fails every running request (core/serving_slots.py)
+    # Multi mode: the request first gets its instance (serving_slots.place); its pool and slot table are used below.
     pool_need, pool_cap, prompt_est = 0, serving_slots.pool_capacity(state.profile), 0
-    if pool_cap:
+    multi = main_router.is_multi()
+    uid = get_current_user_id()
+    session = get_current_session()
+    pool, inst = serving_slots.pool, None
+    if pool_cap or multi:
         try:
             from core.agent_loop import estimate_prompt_tokens
             prompt_est = estimate_prompt_tokens(msgs, tools)
             # the estimate corrected by what llama-server really read on earlier answers (TokenCalibration)
             pool_need = serving_slots.request_need(serving_slots.calibration.scale(prompt_est), max_tokens,
                                                    state.profile)
-            if not serving_slots.pool.fits(pool_need, pool_cap):
-                yield ("queued", {"position": serving_slots.pool.waiting + 1, "reason": "memory"})
-            await serving_slots.pool.acquire(pool_need, pool_cap)
+            if multi:
+                inst = serving_slots.place(uid, session, pool_need, state.profile)
+                pool = serving_slots.pool_for(inst)
+                pool_cap = serving_slots.instance_capacity(state.profile, serving_slots.instance_n_slots(inst))
+            if pool_cap:
+                if not pool.fits(pool_need, pool_cap):
+                    yield ("queued", {"position": pool.waiting + 1, "reason": "memory"})
+                await pool.acquire(pool_need, pool_cap)
+            else:
+                pool_need = 0
         except BaseException:
             glob.release()
             mine.release()
             raise
-    slot = None
-    n_slots = int((state.profile or {}).get("n_slots") or 1)
-    uid = get_current_user_id()
-    if n_slots > 1 and uid is not None and (APP_CONFIG.get("serving") or {}).get("slot_affinity", True):
-        slot = _choose_slot(uid, n_slots)
-        serving_slots.table.begin(slot)
+    slot, tbl = None, None
+    if multi:
+        # a chat's own slot on its instance; two chats of one user may sit on different slots
+        tbl = serving_slots.table_for(inst)
+        slot = tbl.choose((uid, session), serving_slots.user_slot_count(serving_slots.instance_n_slots(inst)))
+        tbl.begin(slot)
         _slot_choice.set(slot)
+        main_router._instance_choice.set(inst)
+    else:
+        n_slots = int((state.profile or {}).get("n_slots") or 1)
+        if n_slots > 1 and uid is not None and (APP_CONFIG.get("serving") or {}).get("slot_affinity", True):
+            slot = _choose_slot(uid, n_slots)
+            serving_slots.table.begin(slot)
+            _slot_choice.set(slot)
     first_token = False
     try:
         async for item in _llm_chat_stream_raw(client_or_state, msgs, tools, temperature, max_tokens,
@@ -296,10 +322,12 @@ async def _llm_chat_stream(client_or_state, msgs: list, tools=None, temperature=
             yield item
     finally:
         if slot is not None:
-            serving_slots.table.end(slot)
+            (tbl or serving_slots.table).end(slot)
             _slot_choice.set(None)
+            if multi:
+                main_router._instance_choice.set(None)
         if pool_need:
-            serving_slots.pool.release(pool_need)
+            pool.release(pool_need)
         glob.release()
         mine.release()
 

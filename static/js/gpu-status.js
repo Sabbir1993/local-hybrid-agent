@@ -24,11 +24,42 @@ let _statusWs = null;
 let _statusWsReconnectTimer = null;
 let _statusHttpFallbackInterval = null;
 
+/* Several servers: one line per llama-server. Single-server mode leaves the block empty, as before.
+   Lives in #main-servers (not #gpu-list), because the GPU bar poll rewrites #gpu-list. */
+function renderMainServers(s) {
+  const box = $('main-servers');
+  if (!box) return;
+  if (s.main_mode !== 'multi' || !Array.isArray(s.main_instances) || !s.main_instances.length) {
+    if (box.innerHTML) box.innerHTML = '';
+    return;
+  }
+  const mine = Number(s.my_instance) || 0;   // 1-based, set only in several-servers mode
+  box.innerHTML = '<div class="main-servers-head">Servers</div>' + s.main_instances.map(x => {
+    const n = Number(x.index) + 1;
+    const gpus = Array.isArray(x.gpus) ? x.gpus : [];
+    const gtxt = gpus.length === 1 ? `GPU ${gpus[0]}` : `GPUs ${gpus.join(', ')}`;
+    const rc = Number(x.restart_count) || 0;
+    let state;
+    if (x.loading) state = 'loading';
+    else if (x.healthy) state = x.degraded ? 'ready, degraded' : 'ready';
+    else if (rc > 0) state = `restarting (${rc} restart${rc === 1 ? '' : 's'})`;
+    else state = x.pid ? 'starting' : 'stopped';
+    const slots = `${x.n_slots} slot${Number(x.n_slots) === 1 ? '' : 's'}`;
+    const up = (x.pid && x.uptime_s != null) ? `, up ${fmtUptime(x.uptime_s)}` : '';
+    const err = x.error ? `<div class="main-srv-err">${esc(x.error)}</div>` : '';
+    const tag = mine === n ? ' <span class="main-srv-tag">your chat</span>' : '';
+    return `<div class="main-srv${mine === n ? ' is-mine' : ''}">`
+      + `<div class="main-srv-line"><b>Server ${n}</b> (port ${esc(x.port)}), ${esc(gtxt)}: ${esc(state)}, ${esc(slots)}${up}${tag}</div>`
+      + `${err}</div>`;
+  }).join('');
+}
+
 function applyStatusPayload(s) {
   if (!s) return;
   pollFailures = 0;
   curStatus = s;
   if (s.hardware_tag) updateHardwareTag(s.hardware_tag);
+  renderMainServers(s);
   const cloudMain = s.cloud_main || null;
   const isLoading = !!(window.__isModelLoading || s.loading);
   if (isLoading && !s.healthy && !s.pid) {

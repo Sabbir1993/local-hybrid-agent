@@ -88,6 +88,17 @@ async function loadSelectedModel() {
       const pr = await fetch('/control/preflight?target=' + encodeURIComponent(target) + '&engine=' + encodeURIComponent(engine));
       if (pr.ok) {
         const plan = await pr.json();
+        // several servers: each one is checked on its own; a server that does not fit stops the load, as a single plan does
+        if (Array.isArray(plan.instances) && plan.instances.length) {
+          const bad = plan.instances.findIndex(x => x.ok === false || (x.plan && x.plan.status === 'nofit'));
+          if (bad >= 0) {
+            const bp = plan.instances[bad].plan || {};
+            window.__isModelLoading = false;
+            setPill('off');
+            toast(`Server ${bad + 1} won’t fit. ` + (bp.message || 'Give it fewer slots or other GPUs, then save.'), true);
+            return;
+          }
+        }
         if (plan.status === 'nofit') {
           const sugs = (plan.suggestions || []).slice(0, 3).map(s => s.desc).join(' | ');
           window.__isModelLoading = false;

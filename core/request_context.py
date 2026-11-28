@@ -43,6 +43,19 @@ def get_current_user_id() -> Optional[int]:
     return _current_user_id.get()
 
 
+# The chat/agent session of the current request: multi-instance routing keeps one chat on one llama-server instance
+# (core/main_router.py, core/serving_slots.py place), where its prompt cache lives.
+_current_session: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("current_session", default=None)
+
+
+def set_current_session(session_id: Optional[str]) -> None:
+    _current_session.set(session_id)
+
+
+def get_current_session() -> Optional[str]:
+    return _current_session.get()
+
+
 # Companions used to report a slice of the OS machine GUID (dev_win_<hex>, dev_lnx_...,
 # dev_mac_...): a stable hardware identifier. It is never stored as-is - it's replaced
 # by a one-way hash, which the rebuilt companion also sends itself (so old and new

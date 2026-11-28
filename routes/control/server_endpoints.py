@@ -10,6 +10,7 @@ from core.auth import Principal, user_has_permission
 from core.deps import get_current_user, require_permission
 from core.engines import ENGINES, engine_of
 from core.engines import vllm as vllm_engine
+from core import main_instances
 from core.profiles import build_dynamic_profile, in_models_dir
 from core.profiles.config_store import set_model_engine
 from core.state import state
@@ -65,26 +66,75 @@ async def preflight(target: Optional[str] = None, engine: Optional[str] = None,
             overrides["n_gpu_layers"] = int(ngl)
         if kv in ("f16", "q8_0", "q5_0", "q4_0", "bf16", "f32"):
             overrides["kv_cache_type"] = kv
+        if main_instances.main_mode(profile) == "multi":
+            return await _multi_preflight(profile, overrides or None)
         plan = await loop.run_in_executor(None, vram.plan_launch, profile, overrides or None)
         return plan
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+async def _multi_preflight(profile: dict, overrides: Optional[dict]):
+    """Multi mode: one VRAM plan per llama-server, each with its own GPUs, tensor split and slot count. The top level is
+    instance 0's plan (the shape the single-server card reads), with allow = all servers fit and ok = the same."""
+    import copy
+    from core.config import apply_runtime
+    p = apply_runtime(copy.deepcopy(profile))
+    specs = main_instances.instance_specs(p)
+    if not specs:
+        return JSONResponse({"error": "no main-model server can run on the GPUs present"}, status_code=400)
+
+    def plan_all() -> list:
+        out = []
+        for spec in specs:
+            ov = dict(overrides or {})
+            ov["gpu_devices"] = list(spec["gpus"])
+            ov["n_slots"] = int(spec["n_slots"])
+            ov["tensor_split"] = spec["tensor_split"] or ",".join("1" for _ in spec["gpus"])
+            try:
+                plan = vram.plan_launch(p, ov)
+            except Exception as e:      # an unsized server must read as not fitting, never as fitting
+                plan = {"status": "unknown", "allow": False, "message": f"[vram] {e}"}
+            out.append((spec, plan))
+        return out
+
+    results = await asyncio.get_event_loop().run_in_executor(None, plan_all)
+    instances = [{"index": spec["index"], "port": spec["port"], "gpus": list(spec["gpus"]),
+                  "n_slots": spec["n_slots"], "ok": bool(plan.get("allow")), "plan": plan}
+                 for spec, plan in results]
+    first = next((r for r in instances if r["index"] == 0), instances[0])
+    top = dict(first["plan"])
+    all_ok = all(r["ok"] for r in instances)
+    top["allow"] = all_ok
+    top["ok"] = all_ok
+    top["instances"] = instances
+    return top
+
+
 @router.get("/control/log")
-async def server_log(n: int = 80, user: Principal = Depends(get_current_user)):
+async def server_log(n: int = 80, instance: int = 0, user: Principal = Depends(get_current_user)):
     """The last lines the main model server (llama-server or vLLM) printed, for the admin who is loading a model: when a load
     fails, this is where the real cause is. Super admin only: "model.local.load" can be delegated, and raw server output can hold
     more than a delegate needs (least privilege); a delegate still sees the scrubbed last_load_error in /control/status. Card
     numbers are masked like everywhere else a log line can travel, and server paths, tokens and keys are hidden on top
-    (core/pan.py + routes/control/log_scrub.py). API tokens are never super admin, so they cannot read it either."""
+    (core/pan.py + routes/control/log_scrub.py). API tokens are never super admin, so they cannot read it either.
+    ?instance=<index> picks a server in multi mode (0 = the primary, the same index as /control/status main_instances); an
+    unknown index is 404."""
     if not user.is_super_admin:
         audit_log(user, action="model.log.view", resource="control/log", result="deny")
         raise HTTPException(status_code=403, detail="super admin only")
     from .log_scrub import scrub_log_lines, scrub_log_text
-    lines = scrub_log_lines(state.log_tail(max(1, min(int(n), 300))))
-    err = scrub_log_text(state.last_load_error) if state.last_load_error else state.last_load_error
-    return {"engine": state.engine, "running": state.is_running(), "error": err, "lines": lines}
+    count = max(1, min(int(n), 300))
+    if int(instance) == 0:
+        lines = scrub_log_lines(state.log_tail(count))
+        err = scrub_log_text(state.last_load_error) if state.last_load_error else state.last_load_error
+        return {"engine": state.engine, "running": state.is_running(), "error": err, "lines": lines}
+    extra = next((e for e in (getattr(state, "extras", None) or []) if int(e.index) == int(instance)), None)
+    if extra is None:
+        raise HTTPException(status_code=404, detail=f"no main-model server with index {int(instance)}")
+    lines = scrub_log_lines(extra.log_tail(count))
+    err = scrub_log_text(extra.last_error) if extra.last_error else None
+    return {"engine": state.engine, "running": extra.is_running(), "error": err, "lines": lines}
 
 
 @router.get("/control/vram")
